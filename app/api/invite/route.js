@@ -56,13 +56,20 @@ export async function POST(req) {
       return Response.json({ error: "Hanya owner yang bisa mengundang staf." }, { status: 403 });
     }
 
+    if (role === "kasir" && !outlet) {
+      return Response.json({ error: "Kasir wajib outlet (KBU, KSM, atau SMT)." }, { status: 400 });
+    }
+    if (role !== "kasir" && outlet) {
+      return Response.json({ error: "Purchasing dan Admin tidak pakai outlet — kosongkan outlet." }, { status: 400 });
+    }
+
     const { data: invite, error: invErr } = await admin
       .from("invites")
       .insert({
         business_id: businessId,
         email: email || null,
         role: role || "kasir",
-        outlet: outlet || null,
+        outlet: role === "kasir" ? outlet : null,
         invited_by: authData.user.id,
       })
       .select()

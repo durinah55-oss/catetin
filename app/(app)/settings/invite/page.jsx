@@ -30,15 +30,25 @@ export default function InvitePage() {
 
   const submit = async (e) => {
     e.preventDefault();
+    if (role === "kasir" && !outlet.trim()) {
+      setErr("Kasir wajib pilih outlet (KBU, KSM, atau SMT).");
+      return;
+    }
+    const outletForInvite = role === "kasir" ? outlet.trim() : null;
     setLoading(true); setErr(""); setResult(null);
     try {
-      const inv = await inviteStaff({ email: email.trim() || null, role, outlet: outlet.trim() || null });
+      const inv = await inviteStaff({ email: email.trim() || null, role, outlet: outletForInvite });
       setResult(inv);
     } catch (e2) {
       setErr(e2.message || "Gagal membuat undangan");
     } finally {
       setLoading(false);
     }
+  };
+
+  const pickRole = (r) => {
+    setRole(r);
+    if (r !== "kasir") setOutlet("");
   };
 
   const link = result?.inviteUrl;
@@ -79,7 +89,7 @@ export default function InvitePage() {
             <Field label="Peran">
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {ROLES.map((r) => (
-                  <button key={r.v} type="button" onClick={() => setRole(r.v)}
+                  <button key={r.v} type="button" onClick={() => pickRole(r.v)}
                     style={{ textAlign: "left", padding: "12px 14px", borderRadius: 12, cursor: "pointer",
                       border: `1.5px solid ${role === r.v ? "#6366F1" : "#E8E8F0"}`,
                       background: role === r.v ? "#EEF2FF" : "#fff" }}>
@@ -90,20 +100,28 @@ export default function InvitePage() {
               </div>
             </Field>
 
-            <Field label="Outlet (wajib untuk Kasir)">
-              <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-                {["KBU", "KSM", "SMT"].map((o) => (
-                  <button key={o} type="button" onClick={() => setOutlet(o)}
-                    style={{ flex: 1, padding: "10px 0", borderRadius: 10, cursor: "pointer", fontWeight: 700,
-                      border: `1.5px solid ${outlet === o ? "#6366F1" : "#E8E8F0"}`,
-                      background: outlet === o ? "#EEF2FF" : "#fff", color: outlet === o ? "#4338CA" : "#6B7280" }}>
-                    {o}
-                  </button>
-                ))}
+            {role === "kasir" ? (
+              <Field label="Outlet (wajib untuk Kasir)">
+                <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                  {["KBU", "KSM", "SMT"].map((o) => (
+                    <button key={o} type="button" onClick={() => setOutlet(o)}
+                      style={{ flex: 1, padding: "10px 0", borderRadius: 10, cursor: "pointer", fontWeight: 700,
+                        border: `1.5px solid ${outlet === o ? "#6366F1" : "#E8E8F0"}`,
+                        background: outlet === o ? "#EEF2FF" : "#fff", color: outlet === o ? "#4338CA" : "#6B7280" }}>
+                      {o}
+                    </button>
+                  ))}
+                </div>
+                <input value={outlet} onChange={(e) => setOutlet(e.target.value.toUpperCase())}
+                  placeholder="KBU, KSM, atau SMT" style={inp} />
+              </Field>
+            ) : (
+              <div style={{ padding: "12px 14px", borderRadius: 12, background: role === "purchasing" ? "#ECFDF5" : "#EEF2FF", border: `1px solid ${role === "purchasing" ? "#A7F3D0" : "#C7D2FE"}`, fontSize: 13, color: "#374151", lineHeight: 1.5 }}>
+                {role === "purchasing"
+                  ? "Purchasing tidak pakai outlet — akses semua dompet belanja (Kas Kecil, rekening bayar, e-wallet). Jangan pilih KBU/KSM/SMT."
+                  : "Admin Keuangan tidak pakai outlet — kelola semua outlet dari satu akun."}
               </div>
-              <input value={outlet} onChange={(e) => setOutlet(e.target.value.toUpperCase())}
-                placeholder="KBU, KSM, atau SMT" style={inp} />
-            </Field>
+            )}
 
             {err && <div style={{ padding: "10px 14px", borderRadius: 10, background: "#FEE2E2", color: "#B91C1C", fontSize: 13 }}>{err}</div>}
 
