@@ -1,0 +1,725 @@
+{
+  "generatedAt": "2026-06-19T21:29:25.205Z",
+  "excelPath": "C:\\Users\\Administrator\\Downloads\\Pengeluaran F&B.xlsx",
+  "businessId": "e23ed572-234c-4995-acad-fa6bff7c58d2",
+  "importBatch": "excel_fnb_2025",
+  "mode": "execute",
+  "summary": {
+    "totalRowsParsed": 9013,
+    "totalImported": 7795,
+    "totalSkipped": 1218,
+    "skipReasons": {
+      "nominal_nol": 599,
+      "deskripsi_kosong": 53,
+      "tanggal_invalid": 566
+    },
+    "totalNominal": 1579294638,
+    "totalNominalFormatted": "Rp1.579.294.638",
+    "byOutlet": {
+      "KBU": 2548,
+      "KSM": 727,
+      "GUDANG": 4484,
+      "SMT": 36
+    },
+    "byCategory": {
+      "Bahan Baku": 5830,
+      "Kemasan": 265,
+      "Transport & Ongkos Belanja": 392,
+      "Lain-lain": 401,
+      "Peralatan & Perbaikan": 425,
+      "Kebutuhan Operasional": 247,
+      "Gaji & Upah": 83,
+      "Pembelian Aset": 88,
+      "Listrik, Air & Internet": 55,
+      "Promosi": 4,
+      "Sewa Tempat": 4,
+      "Gas LPG": 1
+    },
+    "topSuppliers": [
+      {
+        "name": "Offline Terdekat",
+        "count": 1587
+      },
+      {
+        "name": "Djaja",
+        "count": 1549
+      },
+      {
+        "name": "Suplier",
+        "count": 1231
+      },
+      {
+        "name": "Pasar Jagasatru",
+        "count": 1146
+      },
+      {
+        "name": "(kosong)",
+        "count": 569
+      },
+      {
+        "name": "Lotte Mart",
+        "count": 398
+      },
+      {
+        "name": "Shopee",
+        "count": 227
+      },
+      {
+        "name": "Mba Ade",
+        "count": 225
+      },
+      {
+        "name": "Tb. Putri Mandiri",
+        "count": 220
+      },
+      {
+        "name": "Karyawan",
+        "count": 140
+      }
+    ]
+  },
+  "sampleFirst20": [
+    {
+      "id": "imp_13f56362cbde6f6b",
+      "type": "out",
+      "amount": 13000,
+      "date": "2025-07-31",
+      "desc": "Pisang",
+      "categoryId": null,
+      "walletId": null,
+      "outlet": "KBU",
+      "supplier": "Offline Terdekat",
+      "module": "purchasing",
+      "source": "purchasing:import",
+      "meta": {
+        "items": [
+          {
+            "name": "Pisang",
+            "qty": 1.5,
+            "unit": "kg",
+            "unitPrice": null,
+            "subtotal": null
+          }
+        ],
+        "importBatch": "excel_fnb_2025",
+        "verified": false,
+        "excelRow": 8,
+        "excelJenis": "Kopi Buri Umah",
+        "mappedCategory": "Bahan Baku"
+      }
+    },
+    {
+      "id": "imp_0d9b43127de669e6",
+      "type": "out",
+      "amount": 16000,
+      "date": "2025-07-31",
+      "desc": "Pakcoy",
+      "categoryId": null,
+      "walletId": null,
+      "outlet": "KSM",
+      "supplier": "Offline Terdekat",
+      "module": "purchasing",
+      "source": "purchasing:import",
+      "meta": {
+        "items": [
+          {
+            "name": "Pakcoy",
+            "qty": 1,
+            "unit": "kg",
+            "unitPrice": null,
+            "subtotal": null
+          }
+        ],
+        "importBatch": "excel_fnb_2025",
+        "verified": false,
+        "excelRow": 9,
+        "excelJenis": "Kisamen",
+        "mappedCategory": "Bahan Baku"
+      }
+    },
+    {
+      "id": "imp_1952384cdca98bb1",
+      "type": "out",
+      "amount": 15000,
+      "date": "2025-07-31",
+      "desc": "Tahu",
+      "categoryId": null,
+      "walletId": null,
+      "outlet": "GUDANG",
+      "supplier": "Offline Terdekat",
+      "module": "purchasing",
+      "source": "purchasing:import",
+      "meta": {
+        "items": [
+          {
+            "name": "Tahu",
+            "qty": 6,
+            "unit": "pcs",
+            "unitPrice": null,
+            "subtotal": null
+          }
+        ],
+        "importBatch": "excel_fnb_2025",
+        "verified": false,
+        "excelRow": 10,
+        "excelJenis": "Gudang Pusat / Office",
+        "mappedCategory": "Bahan Baku"
+      }
+    },
+    {
+      "id": "imp_009ef047fe6bb313",
+      "type": "out",
+      "amount": 16000,
+      "date": "2025-07-31",
+      "desc": "Daun bawang",
+      "categoryId": null,
+      "walletId": null,
+      "outlet": "KSM",
+      "supplier": "Offline Terdekat",
+      "module": "purchasing",
+      "source": "purchasing:import",
+      "meta": {
+        "items": [
+          {
+            "name": "Daun bawang",
+            "qty": 1,
+            "unit": "kg",
+            "unitPrice": null,
+            "subtotal": null
+          }
+        ],
+        "importBatch": "excel_fnb_2025",
+        "verified": false,
+        "excelRow": 11,
+        "excelJenis": "Kisamen",
+        "mappedCategory": "Bahan Baku"
+      }
+    },
+    {
+      "id": "imp_c4133c48d4565711",
+      "type": "out",
+      "amount": 81000,
+      "date": "2025-07-31",
+      "desc": "Thermal Gede",
+      "categoryId": null,
+      "walletId": null,
+      "outlet": "GUDANG",
+      "supplier": "Djaja",
+      "module": "purchasing",
+      "source": "purchasing:import",
+      "meta": {
+        "items": [
+          {
+            "name": "Thermal Gede",
+            "qty": 6,
+            "unit": "pcs",
+            "unitPrice": null,
+            "subtotal": null
+          }
+        ],
+        "importBatch": "excel_fnb_2025",
+        "verified": false,
+        "excelRow": 12,
+        "excelJenis": "Gudang Pusat / Office",
+        "mappedCategory": "Kemasan"
+      }
+    },
+    {
+      "id": "imp_0fa8b77d8fe5a939",
+      "type": "out",
+      "amount": 140000,
+      "date": "2025-07-31",
+      "desc": "Tepung tapioka",
+      "categoryId": null,
+      "walletId": null,
+      "outlet": "GUDANG",
+      "supplier": "Djaja",
+      "module": "purchasing",
+      "source": "purchasing:import",
+      "meta": {
+        "items": [
+          {
+            "name": "Tepung tapioka",
+            "qty": 1,
+            "unit": "dus",
+            "unitPrice": null,
+            "subtotal": null
+          }
+        ],
+        "importBatch": "excel_fnb_2025",
+        "verified": false,
+        "excelRow": 13,
+        "excelJenis": "Gudang Pusat / Office",
+        "mappedCategory": "Bahan Baku"
+      }
+    },
+    {
+      "id": "imp_6a0b410a4a539bc1",
+      "type": "out",
+      "amount": 30000,
+      "date": "2025-07-31",
+      "desc": "Vixal",
+      "categoryId": null,
+      "walletId": null,
+      "outlet": "GUDANG",
+      "supplier": "Djaja",
+      "module": "purchasing",
+      "source": "purchasing:import",
+      "meta": {
+        "items": [
+          {
+            "name": "Vixal",
+            "qty": 2,
+            "unit": "pcs",
+            "unitPrice": null,
+            "subtotal": null
+          }
+        ],
+        "importBatch": "excel_fnb_2025",
+        "verified": false,
+        "excelRow": 14,
+        "excelJenis": "Gudang Pusat / Office",
+        "mappedCategory": "Bahan Baku"
+      }
+    },
+    {
+      "id": "imp_c1f27248d6f73006",
+      "type": "out",
+      "amount": 100000,
+      "date": "2025-07-31",
+      "desc": "Mie Ramen",
+      "categoryId": null,
+      "walletId": null,
+      "outlet": "KSM",
+      "supplier": "Suplier",
+      "module": "purchasing",
+      "source": "purchasing:import",
+      "meta": {
+        "items": [
+          {
+            "name": "Mie Ramen",
+            "qty": 5,
+            "unit": "kg",
+            "unitPrice": null,
+            "subtotal": null
+          }
+        ],
+        "importBatch": "excel_fnb_2025",
+        "verified": false,
+        "excelRow": 15,
+        "excelJenis": "Kisamen",
+        "mappedCategory": "Bahan Baku"
+      }
+    },
+    {
+      "id": "imp_b9b70827eb01fb9f",
+      "type": "out",
+      "amount": 397500,
+      "date": "2025-07-31",
+      "desc": "Telor",
+      "categoryId": null,
+      "walletId": null,
+      "outlet": "GUDANG",
+      "supplier": "Suplier",
+      "module": "purchasing",
+      "source": "purchasing:import",
+      "meta": {
+        "items": [
+          {
+            "name": "Telor",
+            "qty": 15,
+            "unit": "kg",
+            "unitPrice": null,
+            "subtotal": null
+          }
+        ],
+        "importBatch": "excel_fnb_2025",
+        "verified": false,
+        "excelRow": 16,
+        "excelJenis": "Gudang Pusat / Office",
+        "mappedCategory": "Bahan Baku"
+      }
+    },
+    {
+      "id": "imp_93f3f31df6221b25",
+      "type": "out",
+      "amount": 410000,
+      "date": "2025-07-31",
+      "desc": "Ayam Paha Fillet",
+      "categoryId": null,
+      "walletId": null,
+      "outlet": "GUDANG",
+      "supplier": "Suplier",
+      "module": "purchasing",
+      "source": "purchasing:import",
+      "meta": {
+        "items": [
+          {
+            "name": "Ayam Paha Fillet",
+            "qty": 10,
+            "unit": "kg",
+            "unitPrice": null,
+            "subtotal": null
+          }
+        ],
+        "importBatch": "excel_fnb_2025",
+        "verified": false,
+        "excelRow": 17,
+        "excelJenis": "Gudang Pusat / Office",
+        "mappedCategory": "Bahan Baku"
+      }
+    },
+    {
+      "id": "imp_854c4fcb0b1a481d",
+      "type": "out",
+      "amount": 95000,
+      "date": "2025-07-31",
+      "desc": "Gas Ijo",
+      "categoryId": null,
+      "walletId": null,
+      "outlet": "GUDANG",
+      "supplier": "Suplier",
+      "module": "purchasing",
+      "source": "purchasing:import",
+      "meta": {
+        "items": [
+          {
+            "name": "Gas Ijo",
+            "qty": 5,
+            "unit": "tbg",
+            "unitPrice": null,
+            "subtotal": null
+          }
+        ],
+        "importBatch": "excel_fnb_2025",
+        "verified": false,
+        "excelRow": 18,
+        "excelJenis": "Gudang Pusat / Office",
+        "mappedCategory": "Bahan Baku"
+      }
+    },
+    {
+      "id": "imp_d3eaa9f129dd3590",
+      "type": "out",
+      "amount": 74000,
+      "date": "2025-07-31",
+      "desc": "Es Batu",
+      "categoryId": null,
+      "walletId": null,
+      "outlet": "GUDANG",
+      "supplier": "Suplier",
+      "module": "purchasing",
+      "source": "purchasing:import",
+      "meta": {
+        "items": [
+          {
+            "name": "Es Batu",
+            "qty": 31,
+            "unit": "pack",
+            "unitPrice": null,
+            "subtotal": null
+          }
+        ],
+        "importBatch": "excel_fnb_2025",
+        "verified": false,
+        "excelRow": 19,
+        "excelJenis": "Gudang Pusat / Office",
+        "mappedCategory": "Bahan Baku"
+      }
+    },
+    {
+      "id": "imp_d6316d8523a3f35e",
+      "type": "out",
+      "amount": 50000,
+      "date": "2025-07-31",
+      "desc": "Galon Isi Ulang",
+      "categoryId": null,
+      "walletId": null,
+      "outlet": "GUDANG",
+      "supplier": "Suplier",
+      "module": "purchasing",
+      "source": "purchasing:import",
+      "meta": {
+        "items": [
+          {
+            "name": "Galon Isi Ulang",
+            "qty": 10,
+            "unit": "gln",
+            "unitPrice": null,
+            "subtotal": null
+          }
+        ],
+        "importBatch": "excel_fnb_2025",
+        "verified": false,
+        "excelRow": 20,
+        "excelJenis": "Gudang Pusat / Office",
+        "mappedCategory": "Bahan Baku"
+      }
+    },
+    {
+      "id": "imp_59befafc3f537625",
+      "type": "out",
+      "amount": 48500,
+      "date": "2025-07-31",
+      "desc": "Yakult",
+      "categoryId": null,
+      "walletId": null,
+      "outlet": "KBU",
+      "supplier": "Suplier",
+      "module": "purchasing",
+      "source": "purchasing:import",
+      "meta": {
+        "items": [
+          {
+            "name": "Yakult",
+            "qty": 5,
+            "unit": "pack",
+            "unitPrice": null,
+            "subtotal": null
+          }
+        ],
+        "importBatch": "excel_fnb_2025",
+        "verified": false,
+        "excelRow": 21,
+        "excelJenis": "Kopi Buri Umah",
+        "mappedCategory": "Bahan Baku"
+      }
+    },
+    {
+      "id": "imp_88cf52b822b20039",
+      "type": "out",
+      "amount": 380000,
+      "date": "2025-07-31",
+      "desc": "Jamur Kuping",
+      "categoryId": null,
+      "walletId": null,
+      "outlet": "KSM",
+      "supplier": "Pasar Jagasatru",
+      "module": "purchasing",
+      "source": "purchasing:import",
+      "meta": {
+        "items": [
+          {
+            "name": "Jamur Kuping",
+            "qty": 20,
+            "unit": "kg",
+            "unitPrice": null,
+            "subtotal": null
+          }
+        ],
+        "importBatch": "excel_fnb_2025",
+        "verified": false,
+        "excelRow": 24,
+        "excelJenis": "Kisamen",
+        "mappedCategory": "Bahan Baku"
+      }
+    },
+    {
+      "id": "imp_955b6ed12f17e5be",
+      "type": "out",
+      "amount": 160000,
+      "date": "2025-07-31",
+      "desc": "Bawang Bombay",
+      "categoryId": null,
+      "walletId": null,
+      "outlet": "GUDANG",
+      "supplier": "Pasar Jagasatru",
+      "module": "purchasing",
+      "source": "purchasing:import",
+      "meta": {
+        "items": [
+          {
+            "name": "Bawang Bombay",
+            "qty": 5,
+            "unit": "kg",
+            "unitPrice": null,
+            "subtotal": null
+          }
+        ],
+        "importBatch": "excel_fnb_2025",
+        "verified": false,
+        "excelRow": 25,
+        "excelJenis": "Gudang Pusat / Office",
+        "mappedCategory": "Bahan Baku"
+      }
+    },
+    {
+      "id": "imp_1f601fff90426e5d",
+      "type": "out",
+      "amount": 150000,
+      "date": "2025-07-31",
+      "desc": "Bawang Putih",
+      "categoryId": null,
+      "walletId": null,
+      "outlet": "GUDANG",
+      "supplier": "Pasar Jagasatru",
+      "module": "purchasing",
+      "source": "purchasing:import",
+      "meta": {
+        "items": [
+          {
+            "name": "Bawang Putih",
+            "qty": 5,
+            "unit": "kg",
+            "unitPrice": null,
+            "subtotal": null
+          }
+        ],
+        "importBatch": "excel_fnb_2025",
+        "verified": false,
+        "excelRow": 26,
+        "excelJenis": "Gudang Pusat / Office",
+        "mappedCategory": "Bahan Baku"
+      }
+    },
+    {
+      "id": "imp_a8609ffab31baebd",
+      "type": "out",
+      "amount": 240000,
+      "date": "2025-07-31",
+      "desc": "Cabe Rawit merah",
+      "categoryId": null,
+      "walletId": null,
+      "outlet": "GUDANG",
+      "supplier": "Pasar Jagasatru",
+      "module": "purchasing",
+      "source": "purchasing:import",
+      "meta": {
+        "items": [
+          {
+            "name": "Cabe Rawit merah",
+            "qty": 6,
+            "unit": "kg",
+            "unitPrice": null,
+            "subtotal": null
+          }
+        ],
+        "importBatch": "excel_fnb_2025",
+        "verified": false,
+        "excelRow": 27,
+        "excelJenis": "Gudang Pusat / Office",
+        "mappedCategory": "Bahan Baku"
+      }
+    },
+    {
+      "id": "imp_d0ad98de77322d91",
+      "type": "out",
+      "amount": 114000,
+      "date": "2025-07-31",
+      "desc": "Cabai Keriting",
+      "categoryId": null,
+      "walletId": null,
+      "outlet": "GUDANG",
+      "supplier": "Pasar Jagasatru",
+      "module": "purchasing",
+      "source": "purchasing:import",
+      "meta": {
+        "items": [
+          {
+            "name": "Cabai Keriting",
+            "qty": 3,
+            "unit": "kg",
+            "unitPrice": null,
+            "subtotal": null
+          }
+        ],
+        "importBatch": "excel_fnb_2025",
+        "verified": false,
+        "excelRow": 28,
+        "excelJenis": "Gudang Pusat / Office",
+        "mappedCategory": "Bahan Baku"
+      }
+    },
+    {
+      "id": "imp_b6ce5ac9d3b98a8d",
+      "type": "out",
+      "amount": 94000,
+      "date": "2025-07-31",
+      "desc": "Bawang Merah",
+      "categoryId": null,
+      "walletId": null,
+      "outlet": "GUDANG",
+      "supplier": "Pasar Jagasatru",
+      "module": "purchasing",
+      "source": "purchasing:import",
+      "meta": {
+        "items": [
+          {
+            "name": "Bawang Merah",
+            "qty": 2,
+            "unit": "kg",
+            "unitPrice": null,
+            "subtotal": null
+          }
+        ],
+        "importBatch": "excel_fnb_2025",
+        "verified": false,
+        "excelRow": 29,
+        "excelJenis": "Gudang Pusat / Office",
+        "mappedCategory": "Bahan Baku"
+      }
+    }
+  ],
+  "skippedSample": [
+    {
+      "skip": true,
+      "skipReason": "nominal_nol",
+      "rowNum": 7,
+      "deskripsi": "Adel"
+    },
+    {
+      "skip": true,
+      "skipReason": "nominal_nol",
+      "rowNum": 23,
+      "deskripsi": "Adel"
+    },
+    {
+      "skip": true,
+      "skipReason": "nominal_nol",
+      "rowNum": 49,
+      "deskripsi": "Adel"
+    },
+    {
+      "skip": true,
+      "skipReason": "nominal_nol",
+      "rowNum": 65,
+      "deskripsi": "Adel"
+    },
+    {
+      "skip": true,
+      "skipReason": "nominal_nol",
+      "rowNum": 76,
+      "deskripsi": "Adel"
+    },
+    {
+      "skip": true,
+      "skipReason": "nominal_nol",
+      "rowNum": 94,
+      "deskripsi": "Adel"
+    },
+    {
+      "skip": true,
+      "skipReason": "nominal_nol",
+      "rowNum": 110,
+      "deskripsi": "Adel"
+    },
+    {
+      "skip": true,
+      "skipReason": "nominal_nol",
+      "rowNum": 118,
+      "deskripsi": "Adel"
+    },
+    {
+      "skip": true,
+      "skipReason": "nominal_nol",
+      "rowNum": 133,
+      "deskripsi": "Adel"
+    },
+    {
+      "skip": true,
+      "skipReason": "nominal_nol",
+      "rowNum": 136,
+      "deskripsi": "Adel"
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "name": "nf3",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3001",
+    "build": "next build",
+    "test:kasir": "node lib/kasirHarian.test.mjs",
+    "test:sdm": "node lib/sdmHarian.test.mjs",
+    "test:laporan": "node lib/laporanKeuangan.test.mjs",
+    "import:purchasing": "node scripts/importPurchasingExcel.mjs",
+    "scan:item-aliases": "node scripts/scanItemAliases.mjs",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.105.0",
+    "@supabase/supabase-js": "^2.43.0",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
+    "lucide-react": "^0.383.0",
+    "next": "^14.2.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "recharts": "^2.12.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "eslint-config-next": "^14.2.0",
+    "fastest-levenshtein": "^1.0.16",
+    "playwright": "^1.61.0",
+    "xlsx": "^0.18.5"
+  }
+}
