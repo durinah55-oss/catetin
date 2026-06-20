@@ -3605,12 +3605,13 @@ function WalletScreen({ s, mutate, onClose, user }) {
       ...w,
       purchasingUse: w.purchasingUse === true || /kas\s*kecil/i.test(w.name || ""),
       sort: w.sort ?? (Math.max(0, ...s.wallets.map(x => x.sort || 0)) + 10),
+      updatedAt: new Date().toISOString(),
     };
     mutate(d => {
       const i = d.wallets.findIndex(x => x.id === normalized.id);
       if (i >= 0) d.wallets[i] = normalized;
       else d.wallets.push({ ...normalized, id: normalized.id || ("w" + Date.now()) });
-      d.wallets = patchWalletCatalog(d.wallets);
+      d.wallets = sortWallets(d.wallets);
     });
     setEdit(null);
   };
@@ -4425,7 +4426,7 @@ export default function NF3App(props) {
           ...cloudDoc,
           ...merged,
           transactions: normalizeTransactions(merged.transactions),
-          wallets: cloudDoc.wallets,
+          wallets: merged.wallets ?? cloudDoc.wallets,
           _cloudUpdatedAt: cloudDoc._cloudUpdatedAt,
         };
       }
