@@ -57,6 +57,19 @@ function formatNominal(val) {
   return Number(val).toLocaleString("id-ID");
 }
 
+function calcItemsTotal(items) {
+  return (items || []).reduce(
+    (sum, i) => sum + (Number(i.qty) || 0) * (Number(i.unitPrice) || 0),
+    0
+  );
+}
+
+/** Total yang dipakai simpan: dari item jika ada harga baris, else input manual. */
+function resolvePurchasingAmount(draft) {
+  const itemsTotal = calcItemsTotal(draft.items);
+  return itemsTotal > 0 ? itemsTotal : Math.round(Number(draft.amount) || 0);
+}
+
 // ------------------------------------------------------------
 // Komponen item baris belanja
 // ------------------------------------------------------------
@@ -177,31 +190,36 @@ function StepForm({ s, draft, setDraft, onNext, onClose }) {
     setPreview(URL.createObjectURL(file));
   }
 
+  function syncItems(items, prev) {
+    const itemsTotal = calcItemsTotal(items);
+    return {
+      ...prev,
+      items,
+      amount: itemsTotal > 0 ? itemsTotal : prev.amount,
+    };
+  }
+
   function handleItemChange(idx, field, val) {
     setDraft(d => {
       const items = [...d.items];
       items[idx] = { ...items[idx], [field]: val };
-      return { ...d, items };
+      return syncItems(items, d);
     });
   }
 
   function addItem() {
-    setDraft(d => ({
-      ...d,
-      items: [...d.items, { name: "", qty: "", unit: "", unitPrice: "" }],
-    }));
+    setDraft(d => syncItems([...d.items, { name: "", qty: "", unit: "", unitPrice: "" }], d));
   }
 
   function removeItem(idx) {
-    setDraft(d => ({ ...d, items: d.items.filter((_, i) => i !== idx) }));
+    setDraft(d => syncItems(d.items.filter((_, i) => i !== idx), d));
   }
 
-  const itemsTotal = draft.items.reduce(
-    (sum, i) => sum + (Number(i.qty) || 0) * (Number(i.unitPrice) || 0), 0
-  );
-  const nominalBeda = itemsTotal > 0 && draft.amount > 0 && itemsTotal !== draft.amount;
+  const itemsTotal = calcItemsTotal(draft.items);
+  const amountFromItems = itemsTotal > 0;
+  const displayAmount = resolvePurchasingAmount(draft);
 
-  const canNext = draft.amount > 0 && draft.walletId && draft.categoryId
+  const canNext = displayAmount > 0 && draft.walletId && draft.categoryId
     && draft.outlet && draft.supplier.trim() !== "" && draft.date;
 
   return (
@@ -282,22 +300,6 @@ function StepForm({ s, draft, setDraft, onNext, onClose }) {
                   {o.label}
                 </button>
               ))}
-            </div>
-          </div>
-
-          {/* Nominal */}
-          <div style={styles.fieldGroup}>
-            <label style={styles.label}>Nominal total <span style={{ color: "#e24b4a" }}>*</span></label>
-            <div style={{ position: "relative" }}>
-              <span style={styles.prefix}>Rp</span>
-              <input
-                style={{ ...styles.inp, paddingLeft: 32, fontSize: 16, fontWeight: 500 }}
-                type="text"
-                inputMode="numeric"
-                placeholder="0"
-                defaultValue={draft.amount ? formatNominal(draft.amount) : ""}
-                onBlur={handleNominal}
-              />
             </div>
           </div>
 
@@ -401,21 +403,40 @@ function StepForm({ s, draft, setDraft, onNext, onClose }) {
             <button style={styles.addItemBtn} onClick={addItem}>
               + Tambah item
             </button>
-            {itemsTotal > 0 && (
-              <>
-                <div style={styles.divider} />
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                  <span style={{ fontSize: 12, color: "#888" }}>Total dari item</span>
-                  <span style={{ fontSize: 14, fontWeight: 500 }}>{formatRupiah(itemsTotal)}</span>
-                </div>
-                {nominalBeda && (
-                  <div style={styles.warnBox}>
-                    ⚠ Total item ({formatRupiah(itemsTotal)}) berbeda dengan nominal ({formatRupiah(draft.amount)}).
-                    Nominal yang disimpan adalah <strong>{formatRupiah(draft.amount)}</strong>.
-                  </div>
-                )}
-              </>
-            )}
+            <div style={styles.divider} />
+            <label style={styles.label}>
+              Total belanja <span style={{ color: "#e24b4a" }}>*</span>
+            </label>
+            <div style={{ position: "relative" }}>
+              <span style={styles.prefix}>Rp</span>
+              <input
+                style={{
+                  ...styles.inp,
+                  paddingLeft: 32,
+                  fontSize: 16,
+                  fontWeight: 500,
+                  ...(amountFromItems ? styles.inpReadonly : {}),
+                }}
+                type="text"
+                inputMode="numeric"
+                placeholder="0"
+                readOnly={amountFromItems}
+                value={displayAmount ? formatNominal(displayAmount) : ""}
+                onChange={e => {
+                  if (amountFromItems) return;
+                  set("amount", parseNominal(e.target.value));
+                }}
+                onBlur={e => {
+                  if (amountFromItems) return;
+                  handleNominal(e);
+                }}
+              />
+            </div>
+            <p style={{ fontSize: 11, color: "#888", marginTop: 6, marginBottom: 0, lineHeight: 1.45 }}>
+              {amountFromItems
+                ? "Dihitung otomatis dari qty × harga item di atas."
+                : "Isi manual, atau tambahkan qty & harga per item — total akan terisi otomatis."}
+            </p>
           </div>
 
           {/* Foto struk — arsip manual saja (bukan AI scan nota) */}
@@ -479,10 +500,7 @@ function StepReview({ s, draft, onSave, onBack }) {
   const wallet    = myWallets.find(w => w.id === draft.walletId);
   const outletLabel = PURCHASING_OUTLETS.find(o => o.code === draft.outlet)?.label || draft.outlet;
 
-  const itemsTotal = draft.items.reduce(
-    (sum, i) => sum + (Number(i.qty) || 0) * (Number(i.unitPrice) || 0), 0
-  );
-  const nominalBeda = itemsTotal > 0 && draft.amount > 0 && itemsTotal !== draft.amount;
+  const displayAmount = resolvePurchasingAmount(draft);
 
   async function handleSave() {
     setSaving(true);
@@ -506,7 +524,7 @@ function StepReview({ s, draft, onSave, onBack }) {
         }));
 
       const ok = addPurchasingExpense(onSave, {
-        amount:     draft.amount,
+        amount:     displayAmount,
         walletId:   draft.walletId,
         categoryId: draft.categoryId,
         outlet:     draft.outlet,
@@ -536,7 +554,7 @@ function StepReview({ s, draft, onSave, onBack }) {
             <div style={styles.successIcon}>✓</div>
             <div style={{ fontSize: 16, fontWeight: 500, marginBottom: 6 }}>Transaksi tersimpan</div>
             <div style={{ fontSize: 13, color: "#888", marginBottom: 24 }}>
-              {formatRupiah(draft.amount)} dicatat untuk {outletLabel}
+              {formatRupiah(displayAmount)} dicatat untuk {outletLabel}
             </div>
             <div style={{ ...styles.card, textAlign: "left", marginBottom: 16 }}>
               <div style={{ fontSize: 11, color: "#aaa", marginBottom: 8, fontWeight: 500 }}>Ringkasan</div>
@@ -574,18 +592,11 @@ function StepReview({ s, draft, onSave, onBack }) {
           {/* Total */}
           <div style={{ ...styles.card, marginBottom: 10 }}>
             <div style={{ fontSize: 11, color: "#aaa", marginBottom: 4, fontWeight: 500 }}>Total pengeluaran</div>
-            <div style={{ fontSize: 28, fontWeight: 500 }}>{formatRupiah(draft.amount)}</div>
+            <div style={{ fontSize: 28, fontWeight: 500 }}>{formatRupiah(displayAmount)}</div>
             <div style={{ fontSize: 12, color: "#888", marginTop: 4 }}>
               {draft.date} &nbsp;·&nbsp; {wallet?.name || "—"}
             </div>
           </div>
-
-          {nominalBeda && (
-            <div style={styles.warnBox}>
-              ⚠ Total item ({formatRupiah(itemsTotal)}) berbeda dengan nominal.
-              Yang disimpan: <strong>{formatRupiah(draft.amount)}</strong>
-            </div>
-          )}
 
           {/* Info transaksi */}
           <div style={{ ...styles.card, marginBottom: 10 }}>
@@ -623,10 +634,6 @@ function StepReview({ s, draft, onSave, onBack }) {
                   })}
                 </tbody>
               </table>
-              <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 8, borderTop: "0.5px solid #eee", marginTop: 4 }}>
-                <span style={{ fontSize: 12, color: "#888" }}>Total dari item</span>
-                <span style={{ fontSize: 14, fontWeight: 500 }}>{formatRupiah(itemsTotal)}</span>
-              </div>
             </div>
           )}
 
@@ -778,6 +785,12 @@ const styles = {
     borderRadius: 8, border: "0.5px solid #e0e0e0",
     background: "#f9f9f9", fontSize: 13, color: "#1a1a1a",
     fontFamily: "inherit", outline: "none", boxSizing: "border-box",
+  },
+  inpReadonly: {
+    background: "#E6F1FB",
+    borderColor: "#85B7EB",
+    color: "#0C447C",
+    cursor: "default",
   },
   prefix: {
     position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)",

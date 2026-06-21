@@ -39,7 +39,7 @@ import {
 import {
   getReportChannels, getAllReportChannels, getReportUi, groupChannels, cashChannel,
   SETTLE_WALLET_OPTIONS, hydrateReportChannels, hydrateReportUi,
-  factoryChannelsForOutlet, factoryUiForOutlet, createChannelId,
+  factoryChannelsForOutlet, factoryUiForOutlet, createChannelId, appendCustomReportChannel,
 } from "../../../lib/reportChannels";
 import {
   createStaffMessage, visibleStaffMessages, unreadStaffCount,
@@ -3261,20 +3261,21 @@ function ReportChannelSettingsScreen({ s, mutate, onClose }) {
     if (!label) return;
     const ids = channels.map(c => c.id);
     const maxOrder = channels.reduce((m, c) => Math.max(m, c.order || 0), 0);
-    saveChannels([
-      ...channels,
-      {
-        id: createChannelId(label, ids),
-        label,
-        icon: "📌",
-        role: "channel",
-        settleWallet: "w_nf",
-        group: newGroup.trim() || "Lainnya",
-        order: maxOrder + 1,
-        active: true,
-        categoryHint: "penjualan",
-      },
-    ]);
+    const channel = {
+      id: createChannelId(label, ids),
+      label,
+      icon: "📌",
+      role: "channel",
+      settleWallet: "w_bca",
+      group: newGroup.trim() || "Lainnya",
+      order: maxOrder + 1,
+      active: true,
+      categoryHint: "penjualan",
+    };
+    mutate(d => {
+      if (!d.reportChannels) d.reportChannels = hydrateReportChannels(null);
+      d.reportChannels = appendCustomReportChannel(d.reportChannels, channel);
+    });
     setNewLabel("");
     setNewGroup("");
     setAdding(false);
@@ -3360,6 +3361,9 @@ function ReportChannelSettingsScreen({ s, mutate, onClose }) {
               <input value={newGroup} onChange={e => setNewGroup(e.target.value)} placeholder="mis. Transfer Bank"
                 style={{ width: "100%", padding: "11px 12px", borderRadius: 10, border: "1px solid var(--line)", fontSize: 14 }} />
             </Fld>
+            <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: 4, lineHeight: 1.45 }}>
+              Channel baru langsung muncul di form kasir <b>KBU, KSM, dan SMT</b>.
+            </div>
             <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
               <button onClick={addChannel} style={{ flex: 1, padding: 11, borderRadius: 10, border: "none", background: "var(--brand)", color: "#fff", fontWeight: 700, cursor: "pointer" }}>Simpan channel</button>
               <button onClick={() => setAdding(false)} style={{ padding: "11px 16px", borderRadius: 10, border: "1px solid var(--line)", background: "var(--surface)", cursor: "pointer" }}>Batal</button>
