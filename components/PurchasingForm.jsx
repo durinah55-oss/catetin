@@ -16,10 +16,11 @@
 
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { Mic, Loader2, Sparkles } from "lucide-react";
 import { visibleWallets, visibleCategories } from "../lib/rbac";
-import { addPurchasingExpense, PURCHASING_OUTLETS, formatRupiah } from "../lib/purchasingExpense";
+import { addPurchasingExpense, PURCHASING_OUTLETS, formatRupiah, checkPurchasingFloor } from "../lib/purchasingExpense";
+import { ensurePurchasingCategories } from "../lib/purchasingCategories";
 import { walletBalance } from "../lib/kasirHarian";
 import { walletOptionLabel } from "../lib/walletDisplay";
 import { todayLocal } from "../lib/laporanKeuangan";
@@ -119,8 +120,13 @@ function ItemRow({ item, index, onChange, onRemove }) {
 // STEP 1 — Form input
 // ------------------------------------------------------------
 function StepForm({ s, draft, setDraft, onNext, onClose }) {
+  const categories = useMemo(
+    () => ensurePurchasingCategories(s.categories || []),
+    [s.categories]
+  );
   const myWallets = visibleWallets(s.wallets, s.currentUser);
-  const cats      = visibleCategories(s.categories, s.currentUser, "out");
+  const cats      = visibleCategories(categories, s.currentUser, "out");
+  const setupBlocked = cats.length === 0 || myWallets.length === 0;
 
   const fileRef   = useRef(null);
   const recRef    = useRef(null);
@@ -238,6 +244,16 @@ function StepForm({ s, draft, setDraft, onNext, onClose }) {
         </div>
 
         <div style={styles.body}>
+
+          {setupBlocked && (
+            <div style={{ ...styles.warnBox, marginBottom: 14, background: "#fcebeb", borderColor: "#f09595", color: "#791F1F" }}>
+              {cats.length === 0 && myWallets.length === 0
+                ? "Kategori belanja & dompet belum siap — hubungi Admin Keuangan."
+                : cats.length === 0
+                  ? "Kategori belanja belum tersedia — hubungi Admin Keuangan."
+                  : "Belum ada dompet belanja aktif — minta Admin Keuangan aktifkan Kas Kecil / dompet purchasing."}
+            </div>
+          )}
 
           {/* Input suara — purchasing pakai bicara, bukan scan AI nota */}
           <div style={{ ...styles.card, marginBottom: 14, background: "#F5F3FF", border: "1px solid #C7D2FE" }}>
@@ -472,8 +488,8 @@ function StepForm({ s, draft, setDraft, onNext, onClose }) {
         {/* Footer */}
         <div style={styles.footer}>
           <button
-            style={{ ...styles.btnPrimary, opacity: canNext ? 1 : 0.4 }}
-            disabled={!canNext}
+            style={{ ...styles.btnPrimary, opacity: canNext && !setupBlocked ? 1 : 0.4 }}
+            disabled={!canNext || setupBlocked}
             onClick={onNext}
           >
             Lanjut tinjau →
@@ -489,12 +505,16 @@ function StepForm({ s, draft, setDraft, onNext, onClose }) {
 // ------------------------------------------------------------
 // STEP 2 — Review sebelum simpan
 // ------------------------------------------------------------
-function StepReview({ s, draft, onSave, onBack }) {
+function StepReview({ s, draft, onSave, onBack, onClose, onNew }) {
   const [saving, setSaving]   = useState(false);
   const [saved,  setSaved]    = useState(false);
   const [error,  setError]    = useState(null);
 
-  const cats      = visibleCategories(s.categories, s.currentUser, "out");
+  const categories = useMemo(
+    () => ensurePurchasingCategories(s.categories || []),
+    [s.categories]
+  );
+  const cats      = visibleCategories(categories, s.currentUser, "out");
   const catName   = cats.find(c => c.id === draft.categoryId)?.name || draft.categoryId;
   const myWallets = visibleWallets(s.wallets, s.currentUser);
   const wallet    = myWallets.find(w => w.id === draft.walletId);
@@ -506,6 +526,15 @@ function StepReview({ s, draft, onSave, onBack }) {
     setSaving(true);
     setError(null);
     try {
+      const floorErr = checkPurchasingFloor(
+        draft.walletId,
+        displayAmount,
+        s.wallets || [],
+        s.transactions || [],
+        s.currentUser
+      );
+      if (floorErr) throw new Error(floorErr);
+
       // Upload struk dulu kalau ada
       let receiptUrl = null;
       if (draft.receiptFile) {
@@ -563,9 +592,10 @@ function StepReview({ s, draft, onSave, onBack }) {
               <Row label="Dari"     val={draft.supplier} />
               <Row label="Dompet"   val={wallet?.name || "—"} />
             </div>
-            <button style={{ ...styles.btnPrimary, marginBottom: 8 }} onClick={() => window.location.reload()}>
+            <button style={{ ...styles.btnPrimary, marginBottom: 8 }} onClick={() => { setSaved(false); onNew?.(); }}>
               Catat transaksi baru
             </button>
+            <button style={styles.btnSecondary} onClick={onClose}>Selesai</button>
           </div>
         </div>
       </div>
@@ -723,6 +753,34 @@ export default function PurchasingForm({ s, onSave, onClose }) {
   const [step,  setStep]  = useState(1);
   const [draft, setDraft] = useState(EMPTY_DRAFT);
 
+  const categories = useMemo(
+    () => ensurePurchasingCategories(s.categories || []),
+    [s.categories]
+  );
+  const myWallets = visibleWallets(s.wallets, s.currentUser);
+  const cats = visibleCategories(categories, s.currentUser, "out");
+
+  useEffect(() => {
+    setDraft((d) => ({
+      ...d,
+      walletId: d.walletId || myWallets[0]?.id || "",
+      categoryId: d.categoryId || cats[0]?.id || "",
+      outlet: d.outlet || PURCHASING_OUTLETS[0]?.code || "",
+      date: d.date || todayLocal(),
+    }));
+  }, [myWallets, cats]);
+
+  const resetDraft = () => {
+    setDraft({
+      ...EMPTY_DRAFT,
+      walletId: myWallets[0]?.id || "",
+      categoryId: cats[0]?.id || "",
+      outlet: PURCHASING_OUTLETS[0]?.code || "",
+      date: todayLocal(),
+    });
+    setStep(1);
+  };
+
   if (step === 1) {
     return (
       <StepForm
@@ -740,6 +798,8 @@ export default function PurchasingForm({ s, onSave, onClose }) {
       draft={draft}
       onSave={onSave}
       onBack={() => setStep(1)}
+      onClose={onClose}
+      onNew={resetDraft}
     />
   );
 }

@@ -6,7 +6,8 @@ import KategoriPurchasing from "../../../components/KategoriPurchasing";
 import LaporanPurchasing from "../../../components/LaporanPurchasing";
 import AsistenPurchasing from "../../../components/AsistenPurchasing";
 import PurchasingAliasesReview from "../../../components/PurchasingAliasesReview";
-import { loadAppState, saveAppState, mergeAppStateData, mergeCategoriesFromDb, cleanCategoryList, aiParse, fetchBusinessAnalysis } from "../../../lib/appState";
+import { loadAppState, saveAppState, mergeAppStateData, mergeCategoriesFromDb, cleanCategoryList, ensurePurchasingCategories, aiParse, fetchBusinessAnalysis } from "../../../lib/appState";
+import { checkPurchasingFloor } from "../../../lib/purchasingExpense";
 import { normalizeTransaction, normalizeTransactions, resolveWalletId, resolveTransferIds } from "../../../lib/transactionNormalize";
 import { canDo, visibleWallets, visibleCategories, visibleTransactions, ROLE_LABEL, PURCHASING_WALLET_IDS, showPurchasingAsistenTab, showPurchasingAsistenBeranda, canUsePurchasingAsisten, canManageTransactions } from "../../../lib/rbac";
 import { resolveBusinessDisplayName } from "../../../lib/canonicalBusiness";
@@ -390,8 +391,11 @@ async function loadState(bizId, { businessType } = {}) {
         _cloudUpdatedAt,
         walletSetup,
         wallets,
-        categories: cleanCategoryList(
-          mergeCategoriesFromDb(base.categories, savedClean.categories || saved.categories || [])
+        categories: ensurePurchasingCategories(
+          cleanCategoryList(
+            mergeCategoriesFromDb(base.categories, savedClean.categories || saved.categories || [])
+          ),
+          cleanCategoryList
         ),
         transactions: txs,
         profile: { ...base.profile, ...(savedClean.profile || saved.profile) },
@@ -4918,6 +4922,13 @@ export default function NF3App(props) {
   }, [bizId]);
 
   useEffect(() => {
+    if (!user?.role || !bizId || !canonicalBusiness) return;
+    if (user.role === "purchasing" && !features.purchasingModule && canonicalBusiness.id !== bizId) {
+      switchBusiness(canonicalBusiness.id);
+    }
+  }, [user?.role, bizId, features.purchasingModule, canonicalBusiness, switchBusiness]);
+
+  useEffect(() => {
     if (!user?.role) return;
     if (tab === "analisis" && (!canDo(user.role, "lihatAnalisis") || !features.fnbAnalisis)) setTab("beranda");
     if (tab === "asisten" && (!showPurchasingAsistenTab(user.role) || !features.purchasingModule)) setTab("beranda");
@@ -4976,17 +4987,42 @@ export default function NF3App(props) {
 
   const addTx = (d) => {
     const role = user.role || "kasir";
-    if (d.type === "transfer" && !canDo(role, "transfer")) return false;
-    if (d.type === "in" && !canDo(role, "inputIncome")) return false;
-    if (d.type === "out" && !canDo(role, "inputExpense")) return false;
+    if (d.type === "transfer" && !canDo(role, "transfer")) {
+      showActionToast("Transfer tidak diizinkan untuk role Anda.", "error");
+      return false;
+    }
+    if (d.type === "in" && !canDo(role, "inputIncome")) {
+      showActionToast("Pemasukan tidak diizinkan untuk role Anda.", "error");
+      return false;
+    }
+    if (d.type === "out" && !canDo(role, "inputExpense")) {
+      showActionToast("Pengeluaran tidak diizinkan untuk role Anda.", "error");
+      return false;
+    }
     const allowedWallets = new Set(visibleWallets(view?.wallets || [], user).map(w => w.id));
     if (d.type === "transfer") {
-      if (!allowedWallets.has(d.fromWalletId) || !allowedWallets.has(d.toWalletId)) return false;
-    } else if (!allowedWallets.has(d.walletId)) return false;
+      if (!allowedWallets.has(d.fromWalletId) || !allowedWallets.has(d.toWalletId)) {
+        showActionToast("Dompet transfer tidak tersedia untuk akun Anda.", "error");
+        return false;
+      }
+    } else if (!d.walletId || !allowedWallets.has(d.walletId)) {
+      showActionToast("Pilih dompet belanja yang tersedia (hubungi admin jika kosong).", "error");
+      return false;
+    }
+    if (d.type === "out") {
+      const floorErr = role === "purchasing"
+        ? checkPurchasingFloor(d.walletId, d.amount, view?.wallets || [], view?.transactions || [], user)
+        : checkFloor(d.walletId, d.amount, view?.wallets || [], view?.transactions || [], user);
+      if (floorErr) {
+        showActionToast(floorErr, "error");
+        return false;
+      }
+    }
     mutate(st => st.transactions.push({
       ...d,
       id: "t" + Date.now() + Math.random().toString(36).slice(2, 5),
     }));
+    showActionToast("Transaksi tersimpan.", "success");
     return true;
   };
   const acceptDraft = (n) => {
@@ -5069,9 +5105,20 @@ export default function NF3App(props) {
           shellMaxWidth={webMode ? 1100 : 440}
           onMic={() => setCatat(true)} micTitle={getAccountUi(user, business).micTitle} />
 
+        {catat && user.role === "purchasing" && !features.purchasingModule && (
+          <FnbGateSheet
+            target="laporanPurchasing"
+            onClose={() => setCatat(false)}
+            canonicalName={canonicalBusiness?.name || CANONICAL_DISPLAY_NAME}
+            onSwitch={() => {
+              setCatat(false);
+              if (canonicalBusiness?.id && switchBusiness) switchBusiness(canonicalBusiness.id);
+            }}
+          />
+        )}
         {catat && user.role === "purchasing" && features.purchasingModule
           ? <PurchasingForm s={{ ...view, business: { id: bizId } }} onSave={addTx} onClose={() => setCatat(false)} />
-          : catat && <CatatTransaksi s={view} bizId={bizId} onSave={addTx} onClose={() => setCatat(false)} />}
+          : catat && !(user.role === "purchasing" && !features.purchasingModule) && <CatatTransaksi s={view} bizId={bizId} onSave={addTx} onClose={() => setCatat(false)} />}
         {fnbGate && (
           <FnbGateSheet
             target={fnbGate}
