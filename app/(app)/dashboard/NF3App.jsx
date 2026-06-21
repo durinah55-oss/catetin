@@ -79,6 +79,17 @@ import { getTransactionEditPolicy, validateTransactionUpdate, applyTransactionDe
 import { showActionToast } from "../../../lib/actionToast";
 import ActionToast from "../../../components/ActionToast";
 
+/** Interval muat ulang awan — jangan terlalu sering (ganggu input staf). */
+const CLOUD_POLL_MS = 3 * 60 * 1000;
+
+function isUserTypingInForm() {
+  if (typeof document === "undefined") return false;
+  const el = document.activeElement;
+  if (!el) return false;
+  const tag = el.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
+}
+
 /* ============================================================
    NF3 — self-hosted, tampilan mengikuti asli (violet theme)
    ============================================================ */
@@ -2375,8 +2386,29 @@ function SosmedHarianScreen({ s, mutate, onClose, user }) {
   const [questionsText, setQuestionsText] = useState(linesToText(existing?.topQuestions));
   const [err, setErr] = useState("");
   const [ok, setOk] = useState("");
+  const draftDirtyRef = useRef(false);
+  const syncKeyRef = useRef(`${outlet}:${date}`);
 
   useEffect(() => {
+    draftDirtyRef.current =
+      wellDone
+      || !!complaintsText.trim()
+      || !!questionsText.trim()
+      || Object.values(dm).some(v => String(v || "").trim() !== "")
+      || Object.values(comments).some(v => String(v || "").trim() !== "")
+      || Object.values(googleReviews).some(v => String(v || "").trim() !== "")
+      || Object.values(replied).some(v => String(v || "").trim() !== "");
+  }, [dm, comments, googleReviews, replied, wellDone, complaintsText, questionsText]);
+
+  useEffect(() => {
+    const key = `${outlet}:${date}`;
+    const keyChanged = syncKeyRef.current !== key;
+    if (keyChanged) {
+      syncKeyRef.current = key;
+      draftDirtyRef.current = false;
+    }
+    if (!keyChanged && draftDirtyRef.current) return;
+
     const ex = todaySosmedReport(s.sosmedReports, outlet, date);
     const blank = emptyReport(outlet, date);
     setDm({ ...blank.dm, ...ex?.dm });
@@ -2675,17 +2707,35 @@ function KasirHarianScreen({ s, mutate, onClose }) {
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(!!existingReport && !isRevision);
   const [lastReport, setLastReport] = useState(isLocked ? existingReport : null);
+  const draftDirtyRef = useRef(false);
+  const syncDateRef = useRef(date);
+
+  useEffect(() => {
+    draftDirtyRef.current =
+      !!opsNote.trim()
+      || !!physicalCashEnd
+      || channels.some(c => String(amounts[c.id] || "").trim() !== "");
+  }, [amounts, opsNote, physicalCashEnd, channels]);
 
   useEffect(() => {
     const rep = (s.dailyReports || []).find(
       r => r.outlet === user.outlet && r.date === date && r.status !== "settled"
     );
+    const dateChanged = syncDateRef.current !== date;
+    if (dateChanged) {
+      syncDateRef.current = date;
+      draftDirtyRef.current = false;
+    }
+    const forceSync = rep?.status === "revision_requested";
+    if (!dateChanged && draftDirtyRef.current && !submitted && !forceSync) return;
+
     setAmounts(initAmounts(rep));
     setPhysicalCashEnd(rep?.physicalCashEnd ? String(rep.physicalCashEnd) : "");
     setOpsNote(rep?.opsNote || "");
     setSubmitted(!!rep && rep.status !== "revision_requested");
     setLastReport(rep && rep.status !== "revision_requested" ? rep : null);
     setErr("");
+    if (forceSync) draftDirtyRef.current = false;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date, s.dailyReports, user.outlet]);
 
@@ -4741,8 +4791,12 @@ export default function NF3App(props) {
   const skipSaveRef = useRef(false);
   const saveQueueRef = useRef(Promise.resolve());
   const sRef = useRef(null);
+  const overlayRef = useRef(null);
+  const catatRef = useRef(false);
 
   useEffect(() => { sRef.current = s; }, [s]);
+  useEffect(() => { overlayRef.current = overlay; }, [overlay]);
+  useEffect(() => { catatRef.current = catat; }, [catat]);
 
   useEffect(() => { registerServiceWorker(); }, []);
 
@@ -4765,6 +4819,7 @@ export default function NF3App(props) {
 
   const reloadFromCloud = useCallback(async () => {
     if (!bizId) return;
+    if (overlayRef.current || catatRef.current || isUserTypingInForm()) return;
     setCloudSyncState("syncing");
     setLoadErr(null);
     skipSaveRef.current = true;
@@ -4838,12 +4893,15 @@ export default function NF3App(props) {
     });
   }, [members, applyMemberUsers]);
 
-  // Auto-muat ulang dari awan setiap 45 detik (kasir dapat pengumuman admin)
+  // Auto-muat ulang dari awan (jarang + skip saat form/input aktif)
   useEffect(() => {
     if (!bizId) return;
-    const id = setInterval(() => {
-      if (document.visibilityState === "visible") reloadFromCloud();
-    }, 45000);
+    const tick = () => {
+      if (document.visibilityState !== "visible") return;
+      if (overlayRef.current || catatRef.current || isUserTypingInForm()) return;
+      reloadFromCloud();
+    };
+    const id = setInterval(tick, CLOUD_POLL_MS);
     return () => clearInterval(id);
   }, [bizId, reloadFromCloud]);
 
