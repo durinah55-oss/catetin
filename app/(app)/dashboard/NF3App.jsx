@@ -415,11 +415,9 @@ async function loadState(bizId, { businessType } = {}) {
   return defaultState();
 }
 async function saveState(bizId, s) {
-  try {
-    const { currentUser, users, _systemThemeTick, _cloudUpdatedAt, ...data } = s || {};
-    if (data.categories) data.categories = cleanCategoryList(data.categories);
-    await saveAppState(bizId, data);
-  } catch (e) { console.error(e); }
+  const { currentUser, users, _systemThemeTick, _cloudUpdatedAt, ...data } = s || {};
+  if (data.categories) data.categories = cleanCategoryList(data.categories);
+  await saveAppState(bizId, data);
 }
 
 /** Identitas login — satu-satunya sumber permission (bukan state tersimpan). */
@@ -4820,6 +4818,9 @@ export default function NF3App(props) {
   const reloadFromCloud = useCallback(async () => {
     if (!bizId) return;
     if (overlayRef.current || catatRef.current || isUserTypingInForm()) return;
+
+    await saveQueueRef.current.catch(() => {});
+
     setCloudSyncState("syncing");
     setLoadErr(null);
     skipSaveRef.current = true;
@@ -4851,7 +4852,7 @@ export default function NF3App(props) {
       setCloudSyncState("err");
       setTimeout(() => setCloudSyncState("idle"), 2500);
     } finally {
-      setTimeout(() => { skipSaveRef.current = false; }, 1000);
+      skipSaveRef.current = false;
     }
   }, [bizId, business?.type, mergeLoadedDoc]);
 
@@ -4943,7 +4944,10 @@ export default function NF3App(props) {
         if (skipSaveRef.current) return;
         return saveState(bizId, data);
       })
-      .catch((e) => console.error(e));
+      .catch((e) => {
+        console.error(e);
+        showActionToast("Gagal simpan ke awan — coba tombol sync atau refresh", "error");
+      });
   }, [s, bizId]);
 
   const mutate = useCallback((fn) => setS(prev => {
