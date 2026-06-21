@@ -6,7 +6,7 @@ import KategoriPurchasing from "../../../components/KategoriPurchasing";
 import LaporanPurchasing from "../../../components/LaporanPurchasing";
 import AsistenPurchasing from "../../../components/AsistenPurchasing";
 import PurchasingAliasesReview from "../../../components/PurchasingAliasesReview";
-import { loadAppState, saveAppState, mergeAppStateData, mergeCategoriesFromDb, cleanCategoryList, ensurePurchasingCategories, aiParse, fetchBusinessAnalysis } from "../../../lib/appState";
+import { loadAppState, saveAppState, mergeAppStateData, mergeCategoriesFromDb, cleanCategoryList, ensurePurchasingCategories, dedupeTransactionsById, aiParse, fetchBusinessAnalysis } from "../../../lib/appState";
 import { checkPurchasingFloor } from "../../../lib/purchasingExpense";
 import { normalizeTransaction, normalizeTransactions, resolveWalletId, resolveTransferIds } from "../../../lib/transactionNormalize";
 import { canDo, visibleWallets, visibleCategories, visibleTransactions, ROLE_LABEL, PURCHASING_WALLET_IDS, showPurchasingAsistenTab, showPurchasingAsistenBeranda, canUsePurchasingAsisten, canManageTransactions } from "../../../lib/rbac";
@@ -385,7 +385,7 @@ async function loadState(bizId, { businessType } = {}) {
       { mode: mergeMode }
     );
     const wallets = rebuildWalletsWithShared(mergedWallets, walletSetup);
-    const txs = normalizeTransactions(savedClean.transactions || saved.transactions || []);
+      const txs = dedupeTransactionsById(savedClean.transactions || saved.transactions || []);
     return {
       ...base,
       ...savedClean,
@@ -937,7 +937,9 @@ function Beranda({ s, setTab, setOverlay, hide, setHide, onCloudSync, cloudSyncS
   const scopedTx = visibleTransactionsForBusiness(s.transactions, s.wallets, user, business);
   const monthIn = scopedTx.filter(t => t.type === "in" && t.date.startsWith(prefix)).reduce((a, b) => a + b.amount, 0);
   const monthOut = scopedTx.filter(t => t.type === "out" && t.date.startsWith(prefix)).reduce((a, b) => a + b.amount, 0);
-  const totalSaldo = walletsForSaldoTotal(myWallets, user).reduce((a, w) => a + walletBalance(w.id, s.wallets, s.transactions), 0);
+  const totalSaldo = user.role === "purchasing"
+    ? walletBalance("w_kas_kecil", s.wallets, s.transactions)
+    : walletsForSaldoTotal(myWallets, user).reduce((a, w) => a + walletBalance(w.id, s.wallets, s.transactions), 0);
   const inboxCount = canDo(user.role, "inputIncome") ? (s.rawInbox || []).length : 0;
   const notifCount = unreadStaffCount(s.staffMessages, user);
   const scopeLabel = user.role === "kasir" ? `Laci ${user.outlet}` : user.role === "purchasing" ? "Dompet belanja" : "Seluruh dompet";
@@ -1096,10 +1098,10 @@ function Beranda({ s, setTab, setOverlay, hide, setHide, onCloudSync, cloudSyncS
                         : `Total ${fmtMoney(todayReport.total, cur)} · tercatat`
                   : todaySdm
                     ? `Target ${fmtMoney(dailyTarget, cur)} · isi per channel pembayaran`
-                    : "Isi SDM pagi dulu (langkah 1)",
+                    : "Tap untuk isi · backfill tanggal lalu boleh",
               done: !!todayReport && !todayNeedsRevision,
               urgent: todayNeedsRevision,
-              blocked: !todaySdm && !todayReport,
+              blocked: false,
               onClick: () => setOverlay("laporanHarian"),
             },
           ];
@@ -2692,6 +2694,7 @@ function KasirHarianScreen({ s, mutate, onClose }) {
   const floor = LACI_FLOOR;
 
   const [date, setDate] = useState(today());
+  const dateSdm = todaySdmReport(s.sdmReports, user.outlet, date);
   const existingReport = (s.dailyReports || []).find(
     r => r.outlet === user.outlet && r.date === date && r.status !== "settled"
   );
@@ -2746,8 +2749,8 @@ function KasirHarianScreen({ s, mutate, onClose }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date, s.dailyReports, user.outlet]);
 
-  const dailyTarget = todaySdm?.targetOmset || calcDailyOmsetTarget(todaySdm?.headcount || 0, s.outletConfig, user.outlet);
-  const perPerson = todaySdm?.omsetPerPerson || cfg.omsetPerPerson;
+  const dailyTarget = dateSdm?.targetOmset || calcDailyOmsetTarget(dateSdm?.headcount || 0, s.outletConfig, user.outlet);
+  const perPerson = dateSdm?.omsetPerPerson || cfg.omsetPerPerson;
 
   const setAmt = (id, val) => setAmounts(a => ({ ...a, [id]: val.replace(/\D/g, "") }));
 
@@ -2828,9 +2831,9 @@ function KasirHarianScreen({ s, mutate, onClose }) {
           Channel lain dicatat untuk Admin NF3 settle ke rekening/dompet digital.
           <div style={{ marginTop: 6, fontSize: 12, opacity: .9 }}>Setelah kirim → admin verifikasi fisik pagi → owner/admin settle siang s/d esok 17:00.</div>
           {dailyTarget > 0 ? (
-            <div style={{ marginTop: 6 }}>Target hari ini: <b>{fmtMoney(dailyTarget, cur)}</b> ({formatTargetFormula(todaySdm?.headcount, perPerson, cur)})</div>
+            <div style={{ marginTop: 6 }}>Target: <b>{fmtMoney(dailyTarget, cur)}</b> ({formatTargetFormula(dateSdm?.headcount, perPerson, cur)})</div>
           ) : (
-            <div style={{ marginTop: 6 }}>Target: <b>{fmtMoney(cfg.omsetPerPerson, cur)}/org × SDM</b> — isi SDM pagi dulu</div>
+            <div style={{ marginTop: 6 }}>Target: <b>{fmtMoney(cfg.omsetPerPerson, cur)}/org × SDM</b> — SDM pagi opsional untuk backfill tanggal lalu</div>
           )}
         </div>
         {isRevision && existingReport?.revisionNote && (
@@ -2839,15 +2842,15 @@ function KasirHarianScreen({ s, mutate, onClose }) {
             <div style={{ fontSize: 13, color: "var(--ink)", lineHeight: 1.45 }}>{existingReport.revisionNote}</div>
           </div>
         )}
-        {!todaySdm && (
+        {!dateSdm && date === today() && (
           <div style={{ fontSize: 13, color: "var(--ink2)", marginBottom: 12, padding: "10px 12px", background: "var(--surface2)", borderRadius: 10 }}>
-            Belum input SDM pagi — target omset belum dihitung. Isi SDM dulu di Beranda.
+            Belum input SDM pagi hari ini — target omset estimasi. Isi SDM di Beranda jika perlu.
           </div>
         )}
-        {todaySdm && (
+        {dateSdm && (
           <Card style={{ marginBottom: 14, padding: "12px 14px", background: "var(--surface2)" }}>
             <div style={{ fontSize: 13, color: "var(--ink2)" }}>
-              SDM {todaySdm.headcount} org · target {fmtMoney(dailyTarget, cur)}
+              SDM {dateSdm.headcount} org · target {fmtMoney(dailyTarget, cur)}
             </div>
           </Card>
         )}

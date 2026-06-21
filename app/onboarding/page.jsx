@@ -10,6 +10,7 @@ import {
   fetchMyPendingInvites,
   pickDefaultBusinessId,
 } from "../../lib/repo";
+import { findCanonicalInList } from "../../lib/canonicalBusiness.js";
 
 const PRESETS = [
   { name: "NF F&B", type: "fnb", icon: "🍜" },
@@ -108,6 +109,32 @@ export default function OnboardingPage() {
   const create = async () => {
     const trimmed = name.trim();
     if (!trimmed) return;
+    setLoading(true);
+    setErr("");
+
+    try {
+      const existing = await listMyBusinesses();
+      const canonical = findCanonicalInList(existing);
+      const hasFnb = existing.some((b) => b.type === "fnb");
+      if (type === "fnb" && (canonical || hasFnb)) {
+        const pick = canonical?.id || existing.find((b) => b.type === "fnb")?.id;
+        setErr(
+          "Bisnis F&B sudah ada (Nusa Food). Jangan buat F&B baru — data akan terpisah dan bisa hilang saat sync."
+        );
+        if (pick) {
+          setTimeout(() => {
+            window.location.href = `/dashboard?biz=${pick}`;
+          }, 2500);
+        }
+        return;
+      }
+    } catch (e) {
+      setErr(e.message || "Gagal cek bisnis existing");
+      return;
+    } finally {
+      setLoading(false);
+    }
+
     setLoading(true);
     setErr("");
 
