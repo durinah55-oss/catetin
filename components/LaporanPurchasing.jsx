@@ -29,7 +29,7 @@ import {
   formatPeriodLabel,
   localISO,
 } from "../lib/laporanKeuangan";
-import { formatRupiah, PURCHASING_OUTLETS } from "../lib/purchasingExpense";
+import { formatRupiah, PURCHASING_OUTLETS, purchasingOutletLabel } from "../lib/purchasingExpense";
 import { formatPurchasingWa, openWhatsAppShare } from "../lib/shareWa";
 
 // ------------------------------------------------------------
@@ -77,7 +77,7 @@ function exportCsv(transactions, categories, wallets, bounds, preset) {
       .join(" | ");
     return [
       t.date,
-      t.outlet || "",
+      purchasingOutletLabel(t.outlet),
       catMap[t.categoryId || t.category_id] || "",
       t.supplier || "",
       walletMap[t.walletId || t.wallet_id] || "",
@@ -137,7 +137,7 @@ async function exportPdf(transactions, categories, wallets, bounds, preset) {
     head: [["Tanggal", "Outlet", "Kategori", "Supplier", "Dompet", "Nominal", "Catatan"]],
     body: transactions.map(t => [
       t.date,
-      t.outlet || "—",
+      purchasingOutletLabel(t.outlet),
       catMap[t.categoryId || t.category_id] || "—",
       t.supplier || "—",
       walletMap[t.walletId || t.wallet_id] || "—",
@@ -186,7 +186,7 @@ function TxRow({ tx, catMap, walletMap }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             <span style={{ fontSize: 13, fontWeight: 500 }}>{tx.supplier || "—"}</span>
-            {tx.outlet && <span style={styles.badge}>{tx.outlet}</span>}
+            {tx.outlet && <span style={styles.badge}>{purchasingOutletLabel(tx.outlet)}</span>}
           </div>
           <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>
             {catMap[tx.categoryId || tx.category_id] || "—"}
@@ -397,13 +397,13 @@ export default function LaporanPurchasing({ s, onClose }) {
 
           {/* Filter outlet */}
           <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
-            {["Semua", ...PURCHASING_OUTLETS.map(o => o.code)].map(o => (
+            {[{ code: "Semua", label: "Semua" }, ...PURCHASING_OUTLETS].map(o => (
               <button
-                key={o}
-                style={{ ...styles.outletBtn, ...(outletFilter === o ? styles.outletBtnActive : {}) }}
-                onClick={() => setOutletFilter(o)}
+                key={o.code}
+                style={{ ...styles.outletBtn, ...(outletFilter === o.code ? styles.outletBtnActive : {}) }}
+                onClick={() => setOutletFilter(o.code)}
               >
-                {o}
+                {o.label}
               </button>
             ))}
           </div>
