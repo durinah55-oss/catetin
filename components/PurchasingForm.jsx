@@ -143,14 +143,32 @@ function StepForm({ s, draft, setDraft, onNext, onClose }) {
     setVoiceErr("");
     setVoiceBusy(true);
     try {
-      const r = await aiParse({ mode: "text", text: trimmed, categories: cats });
+      const r = await aiParse({ mode: "purchasing", text: trimmed, categories: cats });
       const cat = cats.find(c => c.name.toLowerCase() === (r.category || "").toLowerCase()) || cats[0];
-      setDraft(d => ({
-        ...d,
-        amount: r.amount || d.amount,
-        desc: r.desc || trimmed,
-        categoryId: cat?.id || d.categoryId,
-      }));
+      const parsedItems = (r.items || [])
+        .filter(i => i?.name)
+        .map(i => ({
+          name: String(i.name).trim(),
+          qty: i.qty ?? "",
+          unit: i.unit || "pcs",
+          unitPrice: i.unitPrice ?? "",
+        }));
+      const itemsTotal = parsedItems.reduce(
+        (s, i) => s + (Number(i.qty) || 0) * (Number(i.unitPrice) || 0),
+        0
+      );
+      setDraft(d => {
+        const nextItems = parsedItems.length ? parsedItems : d.items;
+        const amount = itemsTotal > 0 ? itemsTotal : (r.amount || d.amount);
+        return {
+          ...d,
+          amount,
+          desc: r.desc || trimmed,
+          categoryId: cat?.id || d.categoryId,
+          supplier: r.supplier || d.supplier,
+          items: nextItems,
+        };
+      });
     } catch {
       setVoiceErr("Gagal memahami suara. Coba lagi atau isi manual.");
     } finally {

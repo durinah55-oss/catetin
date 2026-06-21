@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Trash2, Loader2 } from "lucide-react";
+import { Trash2, Loader2, Plus } from "lucide-react";
 import { visibleWallets, visibleCategories } from "../lib/rbac";
 import {
   getTransactionEditPolicy,
@@ -11,14 +11,113 @@ import {
 } from "../lib/transactionEdit";
 import { walletBalance } from "../lib/kasirHarian";
 import { resolveTransferIds } from "../lib/transactionNormalize";
+import { isPurchasingTx } from "../lib/purchasingExpense";
+import {
+  normalizePurchasingItems,
+  itemsTotalFromList,
+  formatPurchasingItemLine,
+  purchasingTxTitle,
+} from "../lib/purchasingItems";
+import { ensurePurchasingCategories } from "../lib/purchasingCategories";
 
 const fmtRp = (n) => `Rp${new Intl.NumberFormat("id-ID").format(Math.round(Number(n) || 0))}`;
+
+function emptyItem() {
+  return { name: "", qty: "", unit: "pcs", unitPrice: "" };
+}
+
+function PurchasingItemEditor({ items, onChange }) {
+  const rows = items.length ? items : [emptyItem()];
+
+  function update(idx, field, val) {
+    const next = rows.map((r, i) => (i === idx ? { ...r, [field]: val } : r));
+    onChange(next);
+  }
+
+  function addRow() {
+    onChange([...rows, emptyItem()]);
+  }
+
+  function removeRow(idx) {
+    onChange(rows.filter((_, i) => i !== idx));
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {rows.map((item, idx) => {
+        const sub = (Number(item.qty) || 0) * (Number(item.unitPrice) || 0);
+        return (
+          <div key={idx} style={{ padding: 10, borderRadius: 10, border: "1px solid var(--line)", background: "var(--surface2)" }}>
+            <input
+              value={item.name}
+              onChange={(e) => update(idx, "name", e.target.value)}
+              placeholder="Nama barang (mis. ubi ungu)"
+              style={{ ...inp, marginBottom: 6 }}
+            />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 32px", gap: 6 }}>
+              <input
+                type="number"
+                value={item.qty}
+                onChange={(e) => update(idx, "qty", e.target.value)}
+                placeholder="Qty"
+                style={inpSm}
+              />
+              <input
+                value={item.unit}
+                onChange={(e) => update(idx, "unit", e.target.value)}
+                placeholder="Satuan"
+                style={inpSm}
+              />
+              <input
+                type="number"
+                value={item.unitPrice}
+                onChange={(e) => update(idx, "unitPrice", e.target.value)}
+                placeholder="Harga/satuan"
+                style={inpSm}
+              />
+              <button
+                type="button"
+                onClick={() => removeRow(idx)}
+                disabled={rows.length <= 1}
+                style={{ border: "none", background: "none", color: "var(--out)", cursor: rows.length <= 1 ? "default" : "pointer", opacity: rows.length <= 1 ? 0.3 : 1 }}
+                aria-label="Hapus baris"
+              >
+                ✕
+              </button>
+            </div>
+            {sub > 0 && (
+              <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: 4, textAlign: "right" }}>
+                Subtotal: {fmtRp(sub)}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <button type="button" onClick={addRow} style={addRowBtn}>
+        <Plus size={14} /> Tambah barang
+      </button>
+    </div>
+  );
+}
 
 export default function TransactionEditSheet({ tx, s, onSave, onDelete, onClose }) {
   const user = s.currentUser || { role: "kasir" };
   const policy = getTransactionEditPolicy(tx, user);
+  const isPurchasing = isPurchasingTx(tx);
   const myWallets = visibleWallets(s.wallets, user);
   const { from, to } = resolveTransferIds(tx);
+
+  const categories = ensurePurchasingCategories(s.categories || []);
+  const inCats = visibleCategories(categories, user, "in");
+  const outCats = visibleCategories(categories, user, "out");
+  const cats = tx.type === "in" ? inCats : outCats;
+
+  const initialItems = (tx.meta?.items || []).map((i) => ({
+    name: i.name || "",
+    qty: i.qty ?? "",
+    unit: i.unit || "pcs",
+    unitPrice: i.unitPrice ?? "",
+  }));
 
   const [form, setForm] = useState({
     amount: String(tx.amount || ""),
@@ -30,14 +129,15 @@ export default function TransactionEditSheet({ tx, s, onSave, onDelete, onClose 
     toWalletId: to || "",
     supplier: tx.supplier || "",
   });
+  const [itemRows, setItemRows] = useState(initialItems.length ? initialItems : [emptyItem()]);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
-  const inCats = visibleCategories(s.categories, user, "in");
-  const outCats = visibleCategories(s.categories, user, "out");
-  const cats = tx.type === "in" ? inCats : outCats;
+  const normalizedItems = normalizePurchasingItems(itemRows);
+  const itemsTotal = itemsTotalFromList(itemRows);
+  const displayAmount = itemsTotal > 0 ? itemsTotal : Math.round(Number(form.amount) || 0);
 
   const previewBalance = () => {
     if (tx.type === "transfer") {
@@ -54,7 +154,23 @@ export default function TransactionEditSheet({ tx, s, onSave, onDelete, onClose 
 
   const handleSave = () => {
     setErr("");
-    const patch = buildTransactionPatch(form, tx);
+    const meta = isPurchasing
+      ? {
+          ...(tx.meta || {}),
+          items: normalizedItems,
+          itemsTotal: displayAmount,
+        }
+      : tx.meta;
+
+    const patch = buildTransactionPatch(
+      {
+        ...form,
+        amount: displayAmount,
+        meta,
+      },
+      tx
+    );
+
     const validationErr = validateTransactionUpdate(tx, patch, {
       wallets: s.wallets,
       transactions: s.transactions,
@@ -108,17 +224,41 @@ export default function TransactionEditSheet({ tx, s, onSave, onDelete, onClose 
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <div style={{ fontSize: 12, color: "var(--ink3)", lineHeight: 1.45 }}>
-              Ubah nominal, dompet, tanggal, atau catatan. Saldo dompet menyesuaikan otomatis.
+              {isPurchasing
+                ? "Patokan utama: barang dibeli (nama, qty, harga). Kelompok akuntansi hanya Bahan Baku / Kemasan / dll."
+                : "Ubah nominal, dompet, tanggal, atau catatan. Saldo dompet menyesuaikan otomatis."}
               {tx.source && <span> · Sumber: {tx.source}</span>}
             </div>
 
-            <label style={lbl}>Nominal (Rp) *</label>
+            {isPurchasing && normalizedItems.length > 0 && (
+              <div style={hintBox}>
+                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--ink3)", marginBottom: 4 }}>Ringkasan</div>
+                {normalizedItems.map((i, idx) => (
+                  <div key={idx} style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)" }}>{formatPurchasingItemLine(i)}</div>
+                ))}
+              </div>
+            )}
+
+            {isPurchasing && tx.type === "out" && (
+              <>
+                <label style={lbl}>Barang dibeli *</label>
+                <PurchasingItemEditor items={itemRows} onChange={setItemRows} />
+              </>
+            )}
+
+            <label style={lbl}>{itemsTotal > 0 ? "Total belanja (dari item)" : "Nominal (Rp) *"}</label>
             <input
               inputMode="numeric"
-              value={form.amount ? Number(form.amount).toLocaleString("id-ID") : ""}
-              onChange={(e) => set("amount", e.target.value.replace(/\D/g, ""))}
-              style={inp}
+              value={displayAmount ? Number(displayAmount).toLocaleString("id-ID") : ""}
+              onChange={(e) => !itemsTotal && set("amount", e.target.value.replace(/\D/g, ""))}
+              readOnly={itemsTotal > 0}
+              style={{ ...inp, ...(itemsTotal > 0 ? { background: "var(--surface2)", color: "var(--ink2)" } : {}) }}
             />
+            {itemsTotal > 0 && (
+              <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: -8 }}>
+                Dihitung otomatis dari barang di atas.
+              </div>
+            )}
 
             {tx.type === "transfer" ? (
               <>
@@ -144,19 +284,24 @@ export default function TransactionEditSheet({ tx, s, onSave, onDelete, onClose 
               </>
             ) : (
               <>
-                <label style={lbl}>Kategori *</label>
+                <label style={lbl}>{isPurchasing ? "Kelompok belanja *" : "Kategori *"}</label>
                 <select value={form.categoryId} onChange={(e) => set("categoryId", e.target.value)} style={inp}>
                   {cats.map((c) => (
                     <option key={c.id} value={c.id}>{c.name}</option>
                   ))}
                 </select>
+                {isPurchasing && (
+                  <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: -8 }}>
+                    Bukan nama barang — pilih kelompok seperti Bahan Baku, Kemasan, dll.
+                  </div>
+                )}
                 <label style={lbl}>Dompet *</label>
                 <select value={form.walletId} onChange={(e) => set("walletId", e.target.value)} style={inp}>
                   {myWallets.map((w) => (
                     <option key={w.id} value={w.id}>{w.name} — {fmtRp(walletBalance(w.id, s.wallets, s.transactions))}</option>
                   ))}
                 </select>
-                {tx.type === "out" && tx.module === "purchasing" && (
+                {tx.type === "out" && isPurchasing && (
                   <>
                     <label style={lbl}>Supplier</label>
                     <input value={form.supplier} onChange={(e) => set("supplier", e.target.value)} style={inp} placeholder="Nama toko / pasar" />
@@ -171,8 +316,8 @@ export default function TransactionEditSheet({ tx, s, onSave, onDelete, onClose 
             <label style={lbl}>Tanggal *</label>
             <input type="date" value={form.date} onChange={(e) => set("date", e.target.value)} style={inp} />
 
-            <label style={lbl}>Catatan</label>
-            <input value={form.desc} onChange={(e) => set("desc", e.target.value)} style={inp} placeholder="Keterangan transaksi" />
+            <label style={lbl}>Catatan tambahan</label>
+            <input value={form.desc} onChange={(e) => set("desc", e.target.value)} style={inp} placeholder={isPurchasing ? "Opsional — mis. harga naik" : "Keterangan transaksi"} />
 
             {err && <div style={{ padding: 12, borderRadius: 10, background: "var(--out-soft)", color: "var(--out-text)", fontSize: 13 }}>{err}</div>}
 
@@ -196,5 +341,9 @@ export default function TransactionEditSheet({ tx, s, onSave, onDelete, onClose 
 }
 
 const lbl = { fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--ink3)", marginBottom: 6, display: "block" };
-const inp = { width: "100%", padding: "12px 14px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface)", fontSize: 14, color: "var(--ink)", outline: "none" };
+const inp = { width: "100%", padding: "12px 14px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface)", fontSize: 14, color: "var(--ink)", outline: "none", boxSizing: "border-box" };
+const inpSm = { ...inp, padding: "8px 10px", fontSize: 13 };
 const hintBox = { padding: "10px 12px", borderRadius: 10, background: "var(--surface2)", fontSize: 12, color: "var(--ink2)", lineHeight: 1.45 };
+const addRowBtn = { display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "10px", borderRadius: 10, border: "1px dashed var(--line)", background: "none", color: "var(--brand)", fontWeight: 600, fontSize: 13, cursor: "pointer" };
+
+export { purchasingTxTitle };

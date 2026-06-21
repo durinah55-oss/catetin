@@ -30,6 +30,7 @@ import {
   localISO,
 } from "../lib/laporanKeuangan";
 import { formatRupiah, PURCHASING_OUTLETS, purchasingOutletLabel } from "../lib/purchasingExpense";
+import { purchasingTxTitle, purchasingTxSubtitle } from "../lib/purchasingItems";
 import { formatPurchasingWa, openWhatsAppShare } from "../lib/shareWa";
 
 // ------------------------------------------------------------
@@ -185,13 +186,15 @@ function TxRow({ tx, catMap, walletMap }) {
         {/* Info */}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 13, fontWeight: 500 }}>{tx.supplier || "—"}</span>
+            <span style={{ fontSize: 13, fontWeight: 500 }}>{purchasingTxTitle(tx)}</span>
             {tx.outlet && <span style={styles.badge}>{purchasingOutletLabel(tx.outlet)}</span>}
           </div>
           <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>
-            {catMap[tx.categoryId || tx.category_id] || "—"}
-            {tx.walletId && ` · ${walletMap[tx.walletId || tx.wallet_id] || ""}`}
+            {purchasingTxSubtitle(tx, catMap[tx.categoryId || tx.category_id], walletMap[tx.walletId || tx.wallet_id])}
           </div>
+          {tx.supplier && !purchasingTxTitle(tx).includes(tx.supplier) && (
+            <div style={{ fontSize: 11, color: "#aaa", marginTop: 1 }}>{tx.supplier}</div>
+          )}
           {tx.desc && <div style={{ fontSize: 11, color: "#aaa", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tx.desc}</div>}
         </div>
         {/* Nominal */}

@@ -29,6 +29,23 @@ export async function POST(req) {
       .map(c => `${c.name}(${c.type === "in" ? "pemasukan" : "pengeluaran"})`)
       .join(", ");
 
+    if (mode === "purchasing") {
+      const result = await callClaude({
+        model: MODEL, max_tokens: 1200,
+        messages: [{
+          role: "user",
+          content: `Kamu mesin pencatat BELANJA purchasing resto Indonesia. Ubah kalimat jadi transaksi belanja.
+Kelompok akuntansi (pilih SATU yang paling cocok, nama persis): ${catList}.
+Aturan: ribu/rb=x1000, juta/jt=x1000000. "ayam", "ubi", "minyak" = NAMA BARANG (masuk items), BUKAN kategori.
+Balas HANYA JSON tanpa markdown:
+{"category":"<kelompok dari daftar>","amount":<total bulat>,"supplier":"<toko/pasar jika disebut>","items":[{"name":"<nama barang>","qty":<angka>,"unit":"kg|pcs|liter|...","unitPrice":<harga satuan bulat>}],"desc":"<ringkas opsional>"}
+
+Kalimat: "${text}"`,
+        }],
+      });
+      return Response.json(result);
+    }
+
     if (mode === "text") {
       const result = await callClaude({
         model: MODEL, max_tokens: 1000,

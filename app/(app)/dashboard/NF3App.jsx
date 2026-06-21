@@ -77,6 +77,8 @@ import PwaInstallBanner, { registerServiceWorker } from "../../../components/Pwa
 import NF3Assistant from "../../../components/NF3Assistant";
 import TransactionEditSheet from "../../../components/TransactionEditSheet";
 import { getTransactionEditPolicy, validateTransactionUpdate, applyTransactionDelete } from "../../../lib/transactionEdit";
+import { isPurchasingTx } from "../../../lib/purchasingExpense";
+import { purchasingTxTitle, purchasingTxSubtitle } from "../../../lib/purchasingItems";
 import { showActionToast } from "../../../lib/actionToast";
 import ActionToast from "../../../components/ActionToast";
 
@@ -1300,7 +1302,7 @@ function Beranda({ s, setTab, setOverlay, hide, setHide, onCloudSync, cloudSyncS
                   <TxRowIcon visual={visual} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 600, color: "var(--ink)", fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {isTrf ? `${s.wallets.find(x => x.id === t.fromWalletId)?.name} → ${s.wallets.find(x => x.id === t.toWalletId)?.name}` : (t.desc || cat?.name)}
+                      {isTrf ? `${s.wallets.find(x => x.id === t.fromWalletId)?.name} → ${s.wallets.find(x => x.id === t.toWalletId)?.name}` : (isPurchasingTx(t) ? purchasingTxTitle(t) : (t.desc || cat?.name))}
                     </div>
                     <div style={{ fontSize: 12, color: "var(--ink3)", marginTop: 2 }}>{isTrf ? "Geser laci" : cat?.name} · {w?.name} · {shortDate(t.date)}</div>
                   </div>
@@ -1591,11 +1593,15 @@ function Laporan({ s, mutate, onOpenPair, onOpenPurchasingReport, business, feat
                     <TxRowIcon visual={visual} size={36} />
                     <div style={{ flex: 1, minWidth: 0, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
                       <div style={{ minWidth: 0 }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--ink)" }}>{t.desc || cat?.name || (isTrf ? "Transfer" : "Transaksi")}</div>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--ink)" }}>
+                          {isPurchasingTx(t) ? purchasingTxTitle(t) : (t.desc || cat?.name || (isTrf ? "Transfer" : "Transaksi"))}
+                        </div>
                         <div style={{ fontSize: 12, color: "var(--ink3)", marginTop: 3 }}>
                           {isTrf
                             ? `${fromW?.name || "—"} → ${toW?.name || "—"}`
-                            : `${cat?.name || "—"} · ${w?.name || "—"}`}
+                            : isPurchasingTx(t)
+                              ? `${purchasingTxSubtitle(t, cat, w)}`
+                              : `${cat?.name || "—"} · ${w?.name || "—"}`}
                           {" · "}{shortDate(t.date)}
                           {t.source && <span> · {t.source}</span>}
                         </div>

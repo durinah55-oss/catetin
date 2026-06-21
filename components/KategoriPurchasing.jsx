@@ -25,6 +25,7 @@
 
 import { useState } from "react";
 import { canDo } from "../lib/rbac";
+import { PURCHASING_FINAL_NAMES } from "../lib/purchasingCategories";
 
 // ------------------------------------------------------------
 // Warna pilihan
@@ -219,6 +220,7 @@ export default function KategoriPurchasing({ s, mutate, onClose }) {
   // Ambil kategori purchasing dari app_state
   const cats = (s.categories || []).filter(c =>
     c.type === "out" && c.role === "purchasing"
+    && PURCHASING_FINAL_NAMES.has((c.name || "").trim().toLowerCase())
   ).sort((a, b) => (a.sort || 0) - (b.sort || 0));
 
   const [showForm, setShowForm] = useState(false);
@@ -273,13 +275,7 @@ export default function KategoriPurchasing({ s, mutate, onClose }) {
             <i className="ti ti-arrow-left" aria-hidden="true" />
           </button>
           <span style={styles.headerTitle}>Kategori purchasing</span>
-          <button
-            style={{ ...styles.iconBtn, background: "#E6F1FB", borderColor: "#85B7EB", color: "#0C447C" }}
-            onClick={() => { setEditCat(null); setShowForm(true); }}
-            aria-label="Tambah kategori"
-          >
-            <i className="ti ti-plus" aria-hidden="true" />
-          </button>
+          <div style={{ width: 32 }} />
         </div>
 
         <div style={styles.body}>
@@ -298,7 +294,7 @@ export default function KategoriPurchasing({ s, mutate, onClose }) {
             <div style={styles.infoBox}>
               <i className="ti ti-info-circle" style={{ fontSize: 14, flexShrink: 0 }} aria-hidden="true" />
               <span style={{ fontSize: 12, lineHeight: 1.5 }}>
-                Kategori di sini muncul di form input purchasing. Nonaktifkan untuk sembunyikan tanpa hapus.
+                Hanya 13 kelompok akuntansi resmi (Bahan Baku, Kemasan, dll.). Nama barang seperti &quot;ayam pentung&quot; dicatat di <b>detail item</b> transaksi, bukan di sini.
               </span>
             </div>
           )}
@@ -307,13 +303,7 @@ export default function KategoriPurchasing({ s, mutate, onClose }) {
           {cats.length === 0 && !showForm && (
             <div style={{ textAlign: "center", padding: "32px 0", color: "#bbb" }}>
               <i className="ti ti-tag-off" style={{ fontSize: 32, display: "block", marginBottom: 8 }} aria-hidden="true" />
-              <div style={{ fontSize: 13 }}>Belum ada kategori purchasing</div>
-              <button
-                style={{ ...styles.btnPrimary, marginTop: 16, width: "auto", padding: "8px 20px" }}
-                onClick={() => setShowForm(true)}
-              >
-                + Tambah pertama
-              </button>
+              <div style={{ fontSize: 13 }}>Kelompok belanja belum dimuat — refresh app atau hubungi admin.</div>
             </div>
           )}
 
