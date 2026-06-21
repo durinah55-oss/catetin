@@ -10,6 +10,7 @@ import { resetPasswordRedirectUrl, redirectRecoveryTokensIfPresent } from "../..
 import { withTimeout } from "../../../lib/supabaseSession";
 import { readStoredSession } from "../../../lib/authBootstrap";
 import { useApp } from "../../../components/layout/BusinessProvider";
+import { canSignUpWithoutInvite } from "../../../lib/onboardingPolicy.js";
 
 function LoginInner() {
   const router = useRouter();
@@ -25,6 +26,7 @@ function LoginInner() {
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [redirecting, setRedirecting] = useState(false);
+  const allowSignup = canSignUpWithoutInvite(Boolean(inviteToken));
 
   const resetRedirectTo = () => resetPasswordRedirectUrl();
 
@@ -96,6 +98,9 @@ function LoginInner() {
         return;
       }
       if (mode === "signup") {
+        if (!allowSignup) {
+          throw new Error("Daftar hanya via link undangan owner NF3.");
+        }
         const { error } = await supabase.auth.signUp({
           email,
           password,
@@ -152,7 +157,7 @@ function LoginInner() {
         <form onSubmit={submit} style={{ background: "#fff", borderRadius: 20, padding: 28, border: "1px solid #E8E8F0" }}>
           {mode !== "forgot" && (
             <div style={{ display: "flex", gap: 6, background: "#F3F4F6", padding: 4, borderRadius: 12, marginBottom: 22 }}>
-              {[["signin", "Masuk"], ["signup", "Daftar"]].map(([m, label]) => (
+              {[["signin", "Masuk"], ...(allowSignup ? [["signup", "Daftar"]] : [])].map(([m, label]) => (
                 <button key={m} type="button" onClick={() => { setMode(m); setErr(""); setMsg(""); }}
                   style={{ flex: 1, padding: "9px 0", borderRadius: 9, border: "none", cursor: "pointer",
                     fontWeight: 700, fontSize: 13,
@@ -162,6 +167,15 @@ function LoginInner() {
                   {label}
                 </button>
               ))}
+            </div>
+          )}
+
+          {!allowSignup && mode !== "forgot" && (
+            <div style={{
+              padding: "10px 12px", borderRadius: 10, background: "#EEF2FF", border: "1px solid #C7D2FE",
+              color: "#4338CA", fontSize: 12, lineHeight: 1.45, marginBottom: 16,
+            }}>
+              Daftar akun baru hanya lewat <strong>link undangan</strong> dari owner NF3. Staf outlet: minta link, lalu buka di browser.
             </div>
           )}
 

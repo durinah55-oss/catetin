@@ -233,6 +233,14 @@ begin
     raise exception 'Harus login dulu';
   end if;
 
+  if coalesce(p_type, 'umkm') = 'fnb' and exists (
+    select 1 from public.businesses
+    where slug = 'nusa-food'
+       or id = 'e23ed572-234c-4995-acad-fa6bff7c58d2'::uuid
+  ) then
+    raise exception 'Bisnis F&B NF3 (Nusa Food) sudah ada. Staf harus pakai link undangan owner.';
+  end if;
+
   insert into public.businesses (slug, name, type, owner_id)
   values (p_slug, p_name, coalesce(p_type, 'umkm'), v_uid)
   returning * into v_biz;

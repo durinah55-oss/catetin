@@ -286,7 +286,7 @@ export default function BusinessProvider({ children }) {
   if (!session) {
     return (
       <Gate msg="">
-        <button onClick={() => { window.location.href = "/login"; }} style={btn}>Login / Daftar</button>
+        <button onClick={() => { window.location.href = "/login"; }} style={btn}>Masuk</button>
       </Gate>
     );
   }
@@ -294,7 +294,10 @@ export default function BusinessProvider({ children }) {
   if (businesses.length === 0 && pathname !== "/onboarding") {
     return (
       <Gate msg="">
-        <button onClick={() => { window.location.href = "/onboarding"; }} style={btn}>Buat bisnis</button>
+        <div style={{ maxWidth: 340, textAlign: "center", fontSize: 13, color: "#6B7280", lineHeight: 1.5, marginBottom: 16 }}>
+          Akun belum terhubung ke bisnis NF3. Staf outlet harus pakai link undangan dari owner.
+        </div>
+        <button onClick={() => { window.location.href = "/onboarding"; }} style={btn}>Terima undangan / bantuan</button>
       </Gate>
     );
   }
