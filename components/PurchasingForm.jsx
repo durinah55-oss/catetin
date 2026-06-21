@@ -20,6 +20,8 @@ import { useState, useRef } from "react";
 import { Mic, Loader2, Sparkles } from "lucide-react";
 import { visibleWallets, visibleCategories } from "../lib/rbac";
 import { addPurchasingExpense, PURCHASING_OUTLETS, formatRupiah } from "../lib/purchasingExpense";
+import { walletBalance } from "../lib/kasirHarian";
+import { walletOptionLabel } from "../lib/walletDisplay";
 import { todayLocal } from "../lib/laporanKeuangan";
 import { aiParse } from "../lib/appState";
 import { supabase } from "../lib/supabaseClient";
@@ -334,15 +336,8 @@ function StepForm({ s, draft, setDraft, onNext, onClose }) {
             >
               <option value="">Pilih dompet...</option>
               {myWallets.map(w => {
-                const hidebal = w.hide_balance && s.currentUser?.role === "purchasing";
-                const bal     = hidebal
-                  ? null
-                  : (s.transactions || [])
-                      .filter(t => t.walletId === w.id || t.wallet_id === w.id)
-                      .reduce((sum, t) => sum + (t.type === "in" ? t.amount : -t.amount), w.opening_balance || 0);
-                const label = hidebal
-                  ? w.name
-                  : `${w.name} — ${formatRupiah(bal ?? 0)}`;
+                const bal = walletBalance(w.id, s.wallets, s.transactions || []);
+                const label = walletOptionLabel(w, bal, "IDR", s.currentUser, (n) => formatRupiah(n));
                 return <option key={w.id} value={w.id}>{label}</option>;
               })}
             </select>

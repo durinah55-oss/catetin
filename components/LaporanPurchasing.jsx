@@ -30,6 +30,7 @@ import {
   localISO,
 } from "../lib/laporanKeuangan";
 import { formatRupiah, PURCHASING_OUTLETS } from "../lib/purchasingExpense";
+import { formatPurchasingWa, openWhatsAppShare } from "../lib/shareWa";
 
 // ------------------------------------------------------------
 // Helper
@@ -50,11 +51,11 @@ function isPurchasingTx(t) {
   );
 }
 
-// Periode preset
-const PRESETS = ["Hari ini", "Kemarin", "Mingguan", "Bulanan", "Custom"];
+// Periode preset — "1 hari" = hari ini (untuk ringkas WA)
+const PRESETS = ["1 hari", "Kemarin", "Mingguan", "Bulanan", "Custom"];
 
 function getPresetBounds(preset, anchorDate, customStart, customEnd) {
-  if (preset === "Hari ini")  return getPeriodBounds("Harian",  today());
+  if (preset === "1 hari")   return getPeriodBounds("Harian",  today());
   if (preset === "Kemarin")   return getPeriodBounds("Harian",  isoOffset(-1));
   if (preset === "Mingguan")  return getPeriodBounds("Mingguan", anchorDate);
   if (preset === "Bulanan")   return getPeriodBounds("Bulanan",  anchorDate);
@@ -232,7 +233,8 @@ function TxRow({ tx, catMap, walletMap }) {
 // KOMPONEN UTAMA
 // ------------------------------------------------------------
 export default function LaporanPurchasing({ s, onClose }) {
-  const [preset,      setPreset]      = useState("Hari ini");
+  const user = s.currentUser || { role: "purchasing" };
+  const [preset,      setPreset]      = useState("1 hari");
   const [anchorDate,  setAnchorDate]  = useState(today());
   const [customStart, setCustomStart] = useState(isoOffset(-7));
   const [customEnd,   setCustomEnd]   = useState(today());
@@ -271,6 +273,19 @@ export default function LaporanPurchasing({ s, onClose }) {
     ...o,
     total: filteredTx.filter(t => t.outlet === o.code).reduce((s, t) => s + t.amount, 0),
   })).filter(o => o.total > 0).sort((a, b) => b.total - a.total);
+
+  const waText = useMemo(() => formatPurchasingWa({
+    date: bounds.start,
+    dateEnd: bounds.end,
+    transactions: filteredTx,
+    wallets: s.wallets || [],
+    allTransactions: s.transactions || [],
+    user,
+    outletFilter,
+    periodLabel: preset === "1 hari" || preset === "Kemarin"
+      ? null
+      : formatPeriodLabel(preset === "Mingguan" ? "Mingguan" : preset === "Bulanan" ? "Bulanan" : "Custom", bounds),
+  }), [bounds, filteredTx, s.wallets, s.transactions, user, outletFilter, preset]);
 
   // Navigasi prev/next (Mingguan/Bulanan)
   function navigate(dir) {
@@ -347,9 +362,37 @@ export default function LaporanPurchasing({ s, onClose }) {
 
           {/* Label periode aktif */}
           <div style={{ fontSize: 12, color: "#888", marginBottom: 10 }}>
-            {preset === "Hari ini" && `Hari ini, ${bounds.start}`}
+            {preset === "1 hari" && `Hari ini, ${bounds.start}`}
             {preset === "Kemarin"  && `Kemarin, ${bounds.start}`}
             {preset === "Custom"   && `${customStart} — ${customEnd}`}
+          </div>
+
+          {/* Bagikan WA */}
+          <div style={{ ...styles.exportBar, marginBottom: 14, background: "#ECFDF5", border: "1px solid #A7F3D0" }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "#047857", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+              Kirim ringkasan WhatsApp
+            </div>
+            <div style={{ fontSize: 12, color: "#065F46", marginBottom: 10, lineHeight: 1.45 }}>
+              Daftar barang + jumlah belanja{preset === "1 hari" ? " hari ini" : ""} dan sisa kas kecil.
+            </div>
+            <button
+              type="button"
+              onClick={() => openWhatsAppShare(waText)}
+              style={{
+                width: "100%",
+                padding: "12px 14px",
+                borderRadius: 10,
+                border: "none",
+                background: "#25D366",
+                color: "#fff",
+                fontWeight: 700,
+                fontSize: 14,
+                cursor: "pointer",
+                fontFamily: "inherit",
+              }}
+            >
+              Bagikan ke WhatsApp
+            </button>
           </div>
 
           {/* Filter outlet */}

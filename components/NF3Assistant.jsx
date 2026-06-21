@@ -84,6 +84,10 @@ export default function NF3Assistant({ role, outlet, businessId, sessionToken, b
         const token = sessionToken || readStoredSession()?.access_token;
         if (!token) throw new Error("Sesi login tidak ditemukan.");
 
+        const apiMessages = newMessages
+          .filter((m) => !(m.role === "assistant" && /NF3 Assistant siap bantu/i.test(m.content)))
+          .slice(-6);
+
         const res = await fetch("/api/nf3-assistant", {
           method: "POST",
           headers: {
@@ -91,7 +95,7 @@ export default function NF3Assistant({ role, outlet, businessId, sessionToken, b
             Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({
-            messages: newMessages,
+            messages: apiMessages,
             role: assistantRole,
             outlet,
             businessId,

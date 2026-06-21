@@ -4,6 +4,12 @@ import Anthropic from "@anthropic-ai/sdk";
 import { bearerToken, sbAdmin, sbUser } from "../../../lib/purchasingAliasesAuth.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const MODEL = "claude-haiku-4-5-20251001";
+
+function lookbackDaysForRole(assistantRole) {
+  if (assistantRole === "owner" || assistantRole === "keuangan") return 365;
+  return 90;
+}
 
 async function requireAssistantMember(req, businessId) {
   const token = bearerToken(req);
@@ -48,6 +54,7 @@ function assistantOutlet(member) {
 }
 
 async function fetchTransactions(admin, businessId, assistantRole, outlet) {
+  const lookback = lookbackDaysForRole(assistantRole);
   const { data, error } = await admin
     .from("app_state")
     .select("data")
@@ -68,16 +75,22 @@ async function fetchTransactions(admin, businessId, assistantRole, outlet) {
   }
 
   const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - 90);
+  cutoff.setDate(cutoff.getDate() - lookback);
   txs = txs.filter((t) => t.date && new Date(t.date) >= cutoff);
   txs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-  return { txs, dataLoadError: false };
+  return { txs, dataLoadError: false, lookback };
 }
 
-function buildDataContext(txs, assistantRole) {
+function buildDataContext(txs, assistantRole, lookback = 90) {
+  const strategic = assistantRole === "owner" || assistantRole === "keuangan";
+  const monthLimit = strategic ? 12 : 2;
+  const itemLimit = strategic ? 10 : 5;
+  const supplierLimit = strategic ? 5 : 3;
+  const recentLimit = strategic ? 10 : 5;
+
   if (!txs.length) {
-    return "Data transaksi: belum ada data dalam 90 hari terakhir.";
+    return `Data transaksi: belum ada data dalam ${lookback} hari terakhir.`;
   }
 
   const byOutlet = {};
@@ -113,13 +126,13 @@ function buildDataContext(txs, assistantRole) {
 
   const monthSummary = Object.entries(byMonth)
     .sort((a, b) => b[0].localeCompare(a[0]))
-    .slice(0, 3)
+    .slice(0, monthLimit)
     .map(([m, v]) => `  ${m}: ${fmt(v)}`)
     .join("\n");
 
   const topItems = Object.entries(byItem)
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
+    .slice(0, itemLimit)
     .map(([item, v]) => `  ${item}: ${fmt(v)}`)
     .join("\n");
 
@@ -127,13 +140,13 @@ function buildDataContext(txs, assistantRole) {
     assistantRole !== "kasir"
       ? Object.entries(bySupplier)
           .sort((a, b) => b[1] - a[1])
-          .slice(0, 5)
+          .slice(0, supplierLimit)
           .map(([s, v]) => `  ${s}: ${fmt(v)}`)
           .join("\n")
       : "";
 
   const recent = txs
-    .slice(0, 10)
+    .slice(0, recentLimit)
     .map(
       (t) =>
         `  [${t.date}] ${t.outlet} | ${t.type === "out" ? "keluar" : "masuk"} ${fmt(t.amount)} | ${t.desc || "-"}${t.supplier ? ` (${t.supplier})` : ""}`
@@ -141,56 +154,34 @@ function buildDataContext(txs, assistantRole) {
     .join("\n");
 
   return `
-=== DATA TRANSAKSI NF (90 hari terakhir, total ${txs.length} transaksi) ===
+=== DATA TRANSAKSI NF (${lookback} hari terakhir, total ${txs.length} transaksi) ===
 
 Per outlet:
 ${outletSummary}
 
-Pengeluaran per bulan (3 bulan terakhir):
+Pengeluaran per bulan:
 ${monthSummary}
 
-10 item terbanyak dibeli:
+${itemLimit} item terbanyak dibeli:
 ${topItems}
 
 ${topSuppliers ? `Top supplier:\n${topSuppliers}\n` : ""}
-10 transaksi terbaru:
+${recentLimit} transaksi terbaru:
 ${recent}
 === END DATA ===
 `.trim();
 }
 
-function buildSystemPrompt(assistantRole, outlet, dataContext) {
-  return `Kamu adalah NF3 Assistant, asisten AI internal tim Nusa Food (NF) — bisnis F&B multi-outlet di Cirebon.
-Bahasa: Indonesia kasual, singkat, langsung ke poin.
+function buildStaticSystemPrompt(assistantRole, outlet) {
+  return `NF3 Assistant — asisten internal Nusa Food (F&B multi-outlet, Cirebon).
+Bahasa Indonesia, singkat, fakta dari data.
 
-Outlet:
-- KBU (Kopi Buri Umah) — resto penyetan, bebek goreng & nasi daun jeruk
-- KSM (Kisamen) — resto ramen, "Spicy Ramen, Smooth Matcha"
-- SMT (Samtaro Express) — takeaway kopi & dimsum, no dine-in
-- Gudang Central — pusat purchasing & stok
+Outlet: KBU (penyetan), KSM (ramen), SMT (takeaway kopi/dimsum), Gudang Central.
+Role: ${assistantRole} | Outlet sesi: ${outlet}
 
-Sesi aktif:
-- Role: ${assistantRole}
-- Outlet: ${outlet}
-
-Aturan akses:
-- owner → semua outlet, semua data, boleh analisis & perbandingan
-- keuangan → semua transaksi & kas, TIDAK memberi saran strategis
-- purchasing → data pembelian, supplier, stok, reorder saja
-- kasir → HANYA data outlet ${outlet} sendiri, tolak akses outlet lain
-
-Cara menjawab:
-- Jawab berdasarkan DATA di bawah — jangan mengarang angka
-- Kalau data tidak ada: "Data ini belum tersedia."
-- Singkat, langsung ke fakta atau angka
-- Untuk owner: boleh tambah insight 1-2 kalimat
-- Untuk kasir: tolak pertanyaan outlet lain dengan sopan
-
-Batasan:
-- Tidak membahas gaji atau data pribadi karyawan
-- Tidak menjawab di luar konteks bisnis NF
-
-${dataContext}`;
+Akses: owner=semua (data 1 tahun); keuangan=transaksi/kas; kasir=hanya outlet sendiri (90 hari).
+Jawab dari DATA di blok berikutnya. Jika tidak ada: "Data ini belum tersedia."
+Tidak bahas gaji/SDM pribadi atau di luar bisnis NF.`;
 }
 
 export async function POST(req) {
@@ -210,7 +201,7 @@ export async function POST(req) {
 
     const assistantRole = mapAssistantRole(access.member.role);
     const outlet = assistantOutlet(access.member);
-    const { txs, dataLoadError } = await fetchTransactions(
+    const { txs, dataLoadError, lookback } = await fetchTransactions(
       access.admin,
       businessId,
       assistantRole,
@@ -219,14 +210,10 @@ export async function POST(req) {
 
     const dataContext = dataLoadError
       ? "Data tidak dapat dimuat saat ini."
-      : buildDataContext(txs, assistantRole);
+      : buildDataContext(txs, assistantRole, lookback);
 
-    const systemPrompt = buildSystemPrompt(assistantRole, outlet, dataContext);
-
-    const model =
-      assistantRole === "owner" || assistantRole === "keuangan"
-        ? "claude-sonnet-4-6"
-        : "claude-haiku-4-5-20251001";
+    const staticPrompt = buildStaticSystemPrompt(assistantRole, outlet);
+    const maxTokens = assistantRole === "owner" || assistantRole === "keuangan" ? 512 : 384;
 
     if (!process.env.ANTHROPIC_API_KEY) {
       return Response.json({ error: "ANTHROPIC_API_KEY belum dikonfigurasi." }, { status: 503 });
@@ -234,19 +221,18 @@ export async function POST(req) {
 
     const chatMessages = messages
       .filter((m) => m.role === "user" || m.role === "assistant")
+      .filter((m) => !(m.role === "assistant" && /NF3 Assistant siap bantu/i.test(m.content)))
+      .slice(-6)
       .map((m) => ({ role: m.role, content: m.content }));
 
     const response = await anthropic.messages.create({
-      model,
-      max_tokens: 512,
+      model: MODEL,
+      max_tokens: maxTokens,
       system: [
-        {
-          type: "text",
-          text: systemPrompt,
-          cache_control: { type: "ephemeral" },
-        },
+        { type: "text", text: staticPrompt, cache_control: { type: "ephemeral" } },
+        { type: "text", text: dataContext, cache_control: { type: "ephemeral" } },
       ],
-      messages: chatMessages,
+      messages: chatMessages.length ? chatMessages : [{ role: "user", content: "Halo" }],
     });
 
     const text =

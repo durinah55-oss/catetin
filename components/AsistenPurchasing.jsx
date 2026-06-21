@@ -3,7 +3,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { Sparkles, Send, Loader2, ArrowLeft } from "lucide-react";
-import { buildPurchasingAiContext, PURCHASING_QUICK_PROMPTS } from "../lib/purchasingAiContext";
+import { buildPurchasingAiContext, PURCHASING_QUICK_PROMPTS, fallbackPurchasingAdvice, shouldAnswerLocally } from "../lib/purchasingAiContext";
 import { fetchPurchasingAdvice } from "../lib/appState";
 import { readStoredSession } from "../lib/authBootstrap";
 import { useApp } from "./layout/BusinessProvider";
@@ -19,7 +19,7 @@ function Card({ children, style }) {
 
 export default function AsistenPurchasing({ s, bizId, onClose }) {
   const { session } = useApp();
-  const [days, setDays] = useState(90);
+  const [days, setDays] = useState(30);
   const [outlet, setOutlet] = useState("all");
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
@@ -47,6 +47,16 @@ export default function AsistenPurchasing({ s, bizId, onClose }) {
       try {
         const token = session?.access_token || readStoredSession()?.access_token;
         if (!token) throw new Error("Sesi login tidak ditemukan. Silakan login ulang.");
+
+        if (shouldAnswerLocally(context, text)) {
+          const local = fallbackPurchasingAdvice(context, text);
+          setHistory((prev) => [
+            { q: text, ...local, at: new Date().toISOString() },
+            ...prev,
+          ].slice(0, 12));
+          return;
+        }
+
         const result = await fetchPurchasingAdvice(
           { businessId: bizId, question: text, context },
           token

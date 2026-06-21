@@ -124,7 +124,7 @@ export async function POST(req) {
 
     const response = await anthropic.messages.create({
       model: MODEL,
-      max_tokens: 600,
+      max_tokens: periodeHari >= 90 ? 700 : 600,
       system: [
         {
           type: "text",

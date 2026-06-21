@@ -1,8 +1,24 @@
 // app/api/purchasing-advice/route.js — Asisten Purchasing (read-only, konteks sempit)
 
-import { fallbackPurchasingAdvice } from "../../../lib/purchasingAiContext.js";
+import Anthropic from "@anthropic-ai/sdk";
+import {
+  compactPurchasingContextForAi,
+  fallbackPurchasingAdvice,
+  shouldAnswerLocally,
+} from "../../../lib/purchasingAiContext.js";
 import { enrichPurchasingContextWithAliases } from "../../../lib/purchasingItemAliases.js";
 import { sbAdmin, sbUser } from "../../../lib/purchasingAliasesAuth.js";
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const MODEL = "claude-haiku-4-5-20251001";
+
+const STATIC_SYSTEM = `Kamu asisten purchasing F&B warung/kafe Indonesia.
+Jawab HANYA dari data JSON di user message. Jangan mengarang angka.
+Bahasa Indonesia, singkat (max ~150 kata).
+Fokus: item, supplier, outlet, kategori, pola pengeluaran.
+Jangan bahas omset kasir, SDM, atau keuangan non-purchasing.
+Balas HANYA JSON tanpa markdown:
+{"answer":"<jawaban>","highlights":["poin1"],"actionHint":"<opsional atau kosong>"}`;
 
 async function loadApprovedAliases(admin, businessId) {
   const { data, error } = await admin
@@ -12,8 +28,6 @@ async function loadApprovedAliases(admin, businessId) {
   if (error && !/does not exist/i.test(error.message || "")) throw error;
   return data || [];
 }
-
-const MODEL = "claude-sonnet-4-6";
 
 async function requirePurchasingAccess(req, businessId) {
   const auth = req.headers.get("authorization") || "";
@@ -51,45 +65,21 @@ async function requirePurchasingAccess(req, businessId) {
   return { user: authData.user, role };
 }
 
-async function callClaude(context, question, role) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": process.env.ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 900,
-      messages: [{
-        role: "user",
-        content: `Kamu asisten purchasing F&B warung/kafe Indonesia. Jawab HANYA berdasarkan data JSON di bawah. Jangan mengarang angka di luar data. Jika pertanyaan di luar scope purchasing atau data tidak cukup, katakan jujur.
+async function callClaude(compactContext, question, role) {
+  const userContent = `Role penanya: ${role}
+Data purchasing (${compactContext.period?.days || 30} hari):
+${JSON.stringify(compactContext)}
 
-Aturan:
-- Bahasa Indonesia, singkat & praktis (max ~200 kata jawaban)
-- Fokus kendala belanja: item, supplier, outlet, kategori, pola pengeluaran
-- Jangan bahas omset kasir, SDM outlet, atau keuangan non-purchasing
-- Role penanya: ${role}
+Pertanyaan: ${question}`;
 
-Data purchasing (ringkas, ${context.period?.days || 30} hari):
-${JSON.stringify(context, null, 0)}
-
-Pertanyaan: ${question}
-
-Balas HANYA JSON tanpa markdown:
-{
-  "answer": "<jawaban utuh>",
-  "highlights": ["<poin penting 1>", "<poin 2>"],
-  "actionHint": "<1 langkah praktis opsional, atau string kosong>"
-}`,
-      }],
-    }),
+  const response = await anthropic.messages.create({
+    model: MODEL,
+    max_tokens: 400,
+    system: [{ type: "text", text: STATIC_SYSTEM, cache_control: { type: "ephemeral" } }],
+    messages: [{ role: "user", content: userContent }],
   });
 
-  if (!res.ok) throw new Error(`Claude API error: ${res.status}`);
-  const data = await res.json();
-  const raw = (data.content || [])
+  const raw = (response.content || [])
     .filter((b) => b.type === "text")
     .map((b) => b.text)
     .join("")
@@ -119,11 +109,16 @@ export async function POST(req) {
     const aliasRows = await loadApprovedAliases(admin, businessId);
     const enriched = enrichPurchasingContextWithAliases(context, aliasRows);
 
+    if (shouldAnswerLocally(enriched, q)) {
+      return Response.json({ ...fallbackPurchasingAdvice(enriched, q), question: q });
+    }
+
     if (!process.env.ANTHROPIC_API_KEY) {
       return Response.json(fallbackPurchasingAdvice(enriched, q));
     }
 
-    const result = await callClaude(enriched, q, auth.role);
+    const compact = compactPurchasingContextForAi(enriched, q);
+    const result = await callClaude(compact, q, auth.role);
     return Response.json({ ...result, source: "ai", question: q });
   } catch (e) {
     console.error("Purchasing advice error:", e);

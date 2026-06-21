@@ -8,8 +8,19 @@ import AsistenPurchasing from "../../../components/AsistenPurchasing";
 import PurchasingAliasesReview from "../../../components/PurchasingAliasesReview";
 import { loadAppState, saveAppState, mergeAppStateData, mergeCategoriesFromDb, cleanCategoryList, aiParse, fetchBusinessAnalysis } from "../../../lib/appState";
 import { normalizeTransaction, normalizeTransactions, resolveWalletId, resolveTransferIds } from "../../../lib/transactionNormalize";
-import { canDo, visibleWallets, visibleCategories, visibleTransactions, ROLE_LABEL, PURCHASING_WALLET_IDS, showPurchasingAsistenTab, showPurchasingAsistenBeranda, canUsePurchasingAsisten } from "../../../lib/rbac";
+import { canDo, visibleWallets, visibleCategories, visibleTransactions, ROLE_LABEL, PURCHASING_WALLET_IDS, showPurchasingAsistenTab, showPurchasingAsistenBeranda, canUsePurchasingAsisten, canManageTransactions } from "../../../lib/rbac";
 import { resolveBusinessDisplayName } from "../../../lib/canonicalBusiness";
+import {
+  businessFeatures,
+  visibleWalletsForBusiness,
+  visibleTransactionsForBusiness,
+  isOverlayAllowedForBusiness,
+  fnbFeatureLabel,
+  findCanonicalInList,
+  CANONICAL_DISPLAY_NAME,
+  businessTypeLabel,
+  isFnBOnlyWallet,
+} from "../../../lib/businessFeatures";
 import { resolveAuthMembership } from "../../../lib/membershipResolve";
 import { walletOptionLabel, walletBalanceDisplay, walletsForSaldoTotal, shouldHideWalletBalance } from "../../../lib/walletDisplay";
 import { getAccountUi, navConfig } from "../../../lib/accountUi";
@@ -47,9 +58,26 @@ import {
 import { pairPageUrl } from "../../../lib/appUrl.js";
 import { compressWalletLogo, walletHasLogo } from "../../../lib/walletLogo.js";
 import { patchWalletCatalog, sortWallets, migrateReportChannelSettles } from "../../../lib/wallets.js";
+import {
+  NF_FNB_WALLETS,
+  getWalletCatalogForBusiness,
+  resolveWalletMergeMode,
+  createWalletSetupSeed,
+  createSharedWalletLink,
+  rebuildWalletsWithShared,
+} from "../../../lib/walletPresets.js";
+import {
+  filterShareableRemoteWallets,
+  isCrossBusinessShareableWallet,
+  SHARED_WALLET_POLICY_HINT,
+} from "../../../lib/sharedWalletPolicy.js";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import PwaInstallBanner, { registerServiceWorker } from "../../../components/PwaInstallBanner";
 import NF3Assistant from "../../../components/NF3Assistant";
+import TransactionEditSheet from "../../../components/TransactionEditSheet";
+import { getTransactionEditPolicy, validateTransactionUpdate, applyTransactionDelete } from "../../../lib/transactionEdit";
+import { showActionToast } from "../../../lib/actionToast";
+import ActionToast from "../../../components/ActionToast";
 
 /* ============================================================
    NF3 — self-hosted, tampilan mengikuti asli (violet theme)
@@ -216,31 +244,7 @@ const defaultState = () => ({
   ],
   profile: { name: "Nf3", type: "Usaha", currency: "IDR", theme: "light", email: "sampriatna@gmail.com", pin: "aktif", biometric: true },
   automation: { autoImport: true, replyNotif: true },
-  wallets: [
-    // Kas Laci per outlet — floor 250rb
-    { id: "w_laci_kbu", name: "Laci KBU", type: "kas_fisik", outlet: "KBU", color: "#6366F1", opening: 250000, floor: 250000, active: true, sort: 10 },
-    { id: "w_laci_ksm", name: "Laci Kisamen", type: "kas_fisik", outlet: "KSM", color: "#16A34A", opening: 250000, floor: 250000, active: true, sort: 20 },
-    { id: "w_laci_smt", name: "Laci Samtaro", type: "kas_fisik", outlet: "SMT", color: "#D97706", opening: 250000, floor: 250000, active: true, sort: 30 },
-    // Kas internal
-    { id: "w_kas_besar", name: "Kas Besar", type: "kas_fisik", outlet: null, color: "#0EA5E9", opening: 0, floor: 0, active: true, sort: 40 },
-    // Dompet digital food delivery
-    { id: "w_pm", name: "Shopee Food", type: "digital", outlet: null, color: "#EE4D2D", opening: 0, floor: 0, active: true, sort: 50 },
-    { id: "w_nf", name: "Grab Food", type: "digital", outlet: null, color: "#00B14F", opening: 0, floor: 0, active: true, sort: 51 },
-    { id: "w_gofood", name: "Go Food", type: "digital", outlet: null, color: "#00AA13", opening: 0, floor: 0, active: true, sort: 52 },
-    { id: "w_kas_kecil", name: "Kas Kecil Purchasing", type: "kas_fisik", outlet: null, color: "#8B5CF6", opening: 0, floor: 0, active: true, purchasingUse: true, sort: 60 },
-    { id: "w_ops_kar", name: "Operasional Karyawan", type: "kas_fisik", outlet: null, color: "#EC4899", opening: 0, floor: 0, active: true, sort: 70 },
-    // E-wallet & saldo digital — purchasing (transaksi out = saldo berkurang)
-    { id: "w_shopeepay", name: "ShopeePay", type: "ewallet", outlet: null, color: "#EE4D2D", opening: 0, floor: 0, active: true, purchasingUse: true, sort: 80 },
-    { id: "w_gojek", name: "Saldo Gojek", type: "ewallet", outlet: null, color: "#00AA13", opening: 0, floor: 0, active: true, purchasingUse: true, sort: 90 },
-    // PayLater = hutang wajib bayar; belanja out → saldo minus (boleh negatif)
-    { id: "w_shopee_paylater", name: "Shopee PayLater", type: "paylater", liability: true, allowNegative: true, outlet: null, color: "#B45309", opening: 0, floor: 0, active: true, purchasingUse: true, sort: 100 },
-    // Rekening bank — purchasing boleh belanja; saldo angka disembunyikan di UI purchasing
-    { id: "w_bca", name: "BCA", type: "rekening", outlet: null, color: "#1D4ED8", opening: 0, floor: 0, active: true, ownerOnly: true, purchasingUse: true, hide_balance: true, sort: 110 },
-    { id: "w_bri", name: "BRI", type: "rekening", outlet: null, color: "#DC2626", opening: 0, floor: 0, active: true, ownerOnly: true, purchasingUse: true, hide_balance: true, sort: 120 },
-    { id: "w_mandiri", name: "Mandiri", type: "rekening", outlet: null, color: "#CA8A04", opening: 0, floor: 0, active: true, ownerOnly: true, purchasingUse: true, hide_balance: true, sort: 130 },
-    { id: "w_bni", name: "BNI", type: "rekening", outlet: null, color: "#1E40AF", opening: 0, floor: 0, active: true, ownerOnly: true, purchasingUse: true, hide_balance: true, sort: 140 },
-    { id: "w_owner", name: "Owner", type: "rekening", outlet: null, color: "#7C3AED", opening: 0, floor: 0, active: true, ownerOnly: true, sort: 150 },
-  ],
+  wallets: NF_FNB_WALLETS.map((w) => ({ ...w })),
   categories: [
     { id: "ci1", name: "Penjualan Makanan", type: "in", active: true, role: null },
     { id: "ci2", name: "Penjualan Minuman", type: "in", active: true, role: null },
@@ -325,7 +329,10 @@ const checkFloor = (walletId, amount, wallets, transactions, user) => {
 };
 
 /** Gabung dompet default + patch flag purchasing (BCA/BRI/Mandiri/BNI dll). */
-function mergeWallets(defaults, saved) {
+function mergeWallets(defaults, saved, { mode = "canonical" } = {}) {
+  if (mode === "saved-only") {
+    return sortWallets((saved || []).map((w) => patchPurchasingWallet({ ...w })));
+  }
   const savedList = saved || [];
   const byId = new Map(savedList.map((w) => [w.id, w]));
   const merged = (defaults || []).map((def) => {
@@ -345,21 +352,33 @@ function mergeWallets(defaults, saved) {
   });
   const defaultIds = new Set((defaults || []).map((d) => d.id));
   savedList.filter((w) => !defaultIds.has(w.id)).forEach((w) => merged.push(patchPurchasingWallet(w)));
-  return patchWalletCatalog(merged);
+  if (mode === "canonical") return patchWalletCatalog(merged);
+  return sortWallets(merged);
 }
 
-async function loadState(bizId) {
+async function loadState(bizId, { businessType } = {}) {
   try {
     const saved = await loadAppState(bizId);
     if (saved && Object.keys(saved).length) {
       const { _cloudUpdatedAt, currentUser: _cu, users: _u, ...savedClean } = saved;
       const base = defaultState();
+      const walletSetup = savedClean.walletSetup || saved.walletSetup || null;
+      const resolvedType = walletSetup?.businessType || savedClean.profile?.businessType || saved.profile?.businessType || businessType;
+      const mergeMode = resolveWalletMergeMode(bizId, savedClean);
+      const catalog = getWalletCatalogForBusiness(bizId, resolvedType);
+      const mergedWallets = mergeWallets(
+        mergeMode === "saved-only" ? [] : catalog,
+        savedClean.wallets || saved.wallets,
+        { mode: mergeMode }
+      );
+      const wallets = rebuildWalletsWithShared(mergedWallets, walletSetup);
       const txs = normalizeTransactions(savedClean.transactions || saved.transactions || []);
       return {
         ...base,
         ...savedClean,
         _cloudUpdatedAt,
-        wallets: mergeWallets(base.wallets, savedClean.wallets || saved.wallets),
+        walletSetup,
+        wallets,
         categories: cleanCategoryList(
           mergeCategoriesFromDb(base.categories, savedClean.categories || saved.categories || [])
         ),
@@ -816,33 +835,112 @@ function RoleDailyChecklist({ tasks, accentGradient, headerLabel = "Checklist Ha
   );
 }
 
+// ─── Konteks bisnis (F&B vs e-commerce) ───────────────────
+function BusinessContextBanner({ business, businesses, switchBusiness, features }) {
+  const canonical = findCanonicalInList(businesses || []);
+  const multi = (businesses?.length || 0) > 1;
+
+  if (features.isFnB) {
+    if (!multi) return null;
+    return (
+      <div style={{ margin: "0 16px 14px", padding: "10px 14px", background: "var(--brand-soft)", border: "1px solid var(--line)", borderRadius: 12, fontSize: 12, color: "var(--brand-text)", lineHeight: 1.45 }}>
+        <span style={{ fontWeight: 800 }}>{CANONICAL_DISPLAY_NAME}</span> — resto KBU/KSM/SMT. Ganti bisnis lain lewat tab <b>Atur</b>.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ margin: "0 16px 14px", padding: "12px 14px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 12 }}>
+      <div style={{ fontWeight: 800, fontSize: 13, color: "#1D4ED8" }}>
+        {resolveBusinessDisplayName(business)} · {features.label}
+      </div>
+      <div style={{ fontSize: 12, color: "#1E3A8A", marginTop: 6, lineHeight: 1.5 }}>
+        Anda sedang di bisnis <b>e-commerce/UMKM</b> — dompet kas & operasional terpisah dari resto.
+        Hanya <b>rekening bank</b> yang boleh dihubungkan antar bisnis; NF Cash & laci outlet hanya di {CANONICAL_DISPLAY_NAME}.
+      </div>
+      {canonical && switchBusiness && (
+        <button
+          type="button"
+          onClick={() => switchBusiness(canonical.id)}
+          style={{
+            marginTop: 10,
+            width: "100%",
+            padding: "10px 12px",
+            borderRadius: 10,
+            border: "none",
+            background: "#2563EB",
+            color: "#fff",
+            fontWeight: 700,
+            fontSize: 13,
+            cursor: "pointer",
+          }}
+        >
+          Buka {CANONICAL_DISPLAY_NAME} (F&B)
+        </button>
+      )}
+    </div>
+  );
+}
+
+function FnbGateSheet({ target, onClose, onSwitch, canonicalName }) {
+  return (
+    <Sheet title="Fitur khusus Nusa Food" onClose={onClose}>
+      <div style={{ padding: "8px 4px 24px", fontSize: 14, lineHeight: 1.55, color: "var(--ink2)" }}>
+        <p style={{ margin: "0 0 12px" }}>
+          <b>{fnbFeatureLabel(target)}</b> hanya untuk resto F&B (KBU, KSM, SMT) — bukan untuk bisnis e-commerce/UMKM yang sedang aktif.
+        </p>
+        <p style={{ margin: "0 0 16px" }}>
+          Pindah ke <b>{canonicalName || CANONICAL_DISPLAY_NAME}</b> untuk settle omset, purchasing, atau tugas outlet.
+        </p>
+        <button
+          type="button"
+          onClick={onSwitch}
+          style={{
+            width: "100%",
+            padding: "13px 14px",
+            borderRadius: 12,
+            border: "none",
+            background: "var(--brand)",
+            color: "#fff",
+            fontWeight: 700,
+            fontSize: 14,
+            cursor: "pointer",
+          }}
+        >
+          Pindah ke {canonicalName || CANONICAL_DISPLAY_NAME}
+        </button>
+      </div>
+    </Sheet>
+  );
+}
+
 // ─── Beranda ───────────────────────────────────────────────
-function Beranda({ s, setTab, setOverlay, hide, setHide, onCloudSync, cloudSyncState, syncInfo, bizId, session, businessDisplayName, onCatat }) {
+function Beranda({ s, setTab, setOverlay, hide, setHide, onCloudSync, cloudSyncState, syncInfo, bizId, session, businessDisplayName, onCatat, business, businesses, switchBusiness, features }) {
   const cur = s.profile.currency;
   const prefix = today().slice(0, 7);
   const user = s.currentUser || { role: "kasir" };
-  const myWallets = visibleWallets(s.wallets, user);
-  const scopedTx = visibleTransactions(s.transactions, s.wallets, user);
+  const myWallets = visibleWalletsForBusiness(s.wallets, user, business);
+  const scopedTx = visibleTransactionsForBusiness(s.transactions, s.wallets, user, business);
   const monthIn = scopedTx.filter(t => t.type === "in" && t.date.startsWith(prefix)).reduce((a, b) => a + b.amount, 0);
   const monthOut = scopedTx.filter(t => t.type === "out" && t.date.startsWith(prefix)).reduce((a, b) => a + b.amount, 0);
   const totalSaldo = walletsForSaldoTotal(myWallets, user).reduce((a, w) => a + walletBalance(w.id, s.wallets, s.transactions), 0);
   const inboxCount = canDo(user.role, "inputIncome") ? (s.rawInbox || []).length : 0;
   const notifCount = unreadStaffCount(s.staffMessages, user);
   const scopeLabel = user.role === "kasir" ? `Laci ${user.outlet}` : user.role === "purchasing" ? "Dompet belanja" : "Seluruh dompet";
-  const waitingSettle = canDo(user.role, "settleLaci") ? pendingReports(s.dailyReports, s.transactions) : [];
-  const awaitingVerify = canDo(user.role, "settleLaci") ? reportsAwaitingVerify(s.dailyReports, s.transactions) : [];
-  const readyToSettle = canDo(user.role, "settleLaci") ? reportsReadyToSettle(s.dailyReports, s.transactions) : [];
+  const waitingSettle = features.settleLaci && canDo(user.role, "settleLaci") ? pendingReports(s.dailyReports, s.transactions) : [];
+  const awaitingVerify = features.settleLaci && canDo(user.role, "settleLaci") ? reportsAwaitingVerify(s.dailyReports, s.transactions) : [];
+  const readyToSettle = features.settleLaci && canDo(user.role, "settleLaci") ? reportsReadyToSettle(s.dailyReports, s.transactions) : [];
   const overdueSettle = waitingSettle.filter(r => reportSettleUrgency(r) === "overdue").length;
   const todayReport = user.role === "kasir"
     ? (s.dailyReports || []).find(r => r.outlet === user.outlet && r.date === today() && r.status !== "settled")
     : null;
   const todayNeedsRevision = todayReport?.status === "revision_requested";
   const todaySdm = user.role === "kasir" ? todaySdmReport(s.sdmReports, user.outlet, today()) : null;
-  const showSosmed = canInputSosmed(user, s.sosmedConfig);
+  const showSosmed = features.sosmedReports && canInputSosmed(user, s.sosmedConfig);
   const sosmedOutlet = user.role === "kasir" ? user.outlet : (SOSMED_OUTLETS.find(o => isSosmedEnabled(s.sosmedConfig, o)) || "KBU");
   const todaySosmed = showSosmed && sosmedOutlet && isSosmedEnabled(s.sosmedConfig, sosmedOutlet)
     ? todaySosmedReport(s.sosmedReports, sosmedOutlet, today()) : null;
-  const ui = getAccountUi(user);
+  const ui = getAccountUi(user, business);
   const dailyTarget = todaySdm?.targetOmset || 0;
   const pendingVoids = canDo(user.role, "reviewVoidLog") ? pendingVoidLogs(s.voidLogs).length : 0;
   const todayOutTx = scopedTx.filter(t => t.type === "out" && t.date === today());
@@ -890,6 +988,13 @@ function Beranda({ s, setTab, setOverlay, hide, setHide, onCloudSync, cloudSyncS
           <IconBtn title="Pengumuman staf" onClick={() => setOverlay("notif")} badge={notifCount}><Bell size={20} /></IconBtn>
         </div>
       </div>
+
+      <BusinessContextBanner
+        business={business}
+        businesses={businesses}
+        switchBusiness={switchBusiness}
+        features={features}
+      />
 
       {/* saldo card */}
       <div style={{ margin: "0 16px 20px" }}>
@@ -950,7 +1055,7 @@ function Beranda({ s, setTab, setOverlay, hide, setHide, onCloudSync, cloudSyncS
       {(() => {
         const role = user.role;
 
-        if (role === "kasir" && canDo(role, "inputLaporanHarian")) {
+        if (role === "kasir" && features.kasirDaily && canDo(role, "inputLaporanHarian")) {
           const kasirSosmed = showSosmed && isSosmedEnabled(s.sosmedConfig, user.outlet);
           const tasks = [
             {
@@ -1004,7 +1109,7 @@ function Beranda({ s, setTab, setOverlay, hide, setHide, onCloudSync, cloudSyncS
           );
         }
 
-        if (role === "purchasing") {
+        if (role === "purchasing" && features.purchasingModule) {
           const tasks = [
             {
               id: "belanja",
@@ -1033,7 +1138,7 @@ function Beranda({ s, setTab, setOverlay, hide, setHide, onCloudSync, cloudSyncS
           );
         }
 
-        if (role === "admin" || role === "owner") {
+        if ((role === "admin" || role === "owner") && features.settleLaci) {
           const tasks = [
             {
               id: "verify",
@@ -1097,7 +1202,7 @@ function Beranda({ s, setTab, setOverlay, hide, setHide, onCloudSync, cloudSyncS
               onClick: () => setOverlay("sosmedHarian"),
             });
           }
-          if (showPurchasingAsistenBeranda(role)) {
+          if (showPurchasingAsistenBeranda(role) && features.purchasingModule) {
             tasks.push({
               id: "asisten",
               title: "Tanya Purchasing",
@@ -1113,6 +1218,41 @@ function Beranda({ s, setTab, setOverlay, hide, setHide, onCloudSync, cloudSyncS
               accentGradient={ui.saldoGradient}
               headerLabel={role === "owner" ? "Prioritas Owner" : "Prioritas Admin Keuangan"}
               headerHint="Verifikasi pagi · settle siang s/d esok 17:00 · yang terlambat berkedip"
+            />
+          );
+        }
+
+        if ((role === "admin" || role === "owner") && !features.settleLaci) {
+          const tasks = [
+            {
+              id: "catat",
+              title: "Catat Transaksi",
+              subtitle: todayOutTx.length
+                ? `${todayOutTx.length} pengeluaran hari ini · ${fmtMoney(todayOutTotal, cur)}`
+                : "Pemasukan/pengeluaran bisnis ini — terpisah dari resto F&B",
+              done: todayOutTx.length > 0,
+              onClick: () => onCatat?.(),
+            },
+          ];
+          if (canDo(role, "inputIncome")) {
+            tasks.push({
+              id: "inbox",
+              title: "Inbox Bank / E-wallet",
+              subtitle: inboxCount
+                ? `${inboxCount} draf notifikasi belum diproses`
+                : "Inbox kosong",
+              done: inboxCount === 0,
+              urgent: inboxCount > 0,
+              count: inboxCount || undefined,
+              onClick: () => setOverlay("inbox"),
+            });
+          }
+          return (
+            <RoleDailyChecklist
+              tasks={tasks}
+              accentGradient={ui.saldoGradient}
+              headerLabel={features.label}
+              headerHint="Dompet & transaksi hanya untuk bisnis aktif — bukan KBU/KSM/SMT"
             />
           );
         }
@@ -1174,13 +1314,15 @@ function IconBtn({ children, onClick, badge, title }) {
 }
 
 // ─── Laporan ───────────────────────────────────────────────
-function Laporan({ s, onOpenPair, onOpenPurchasingReport }) {
+function Laporan({ s, mutate, onOpenPair, onOpenPurchasingReport, business, features }) {
   const cur = s.profile.currency;
   const user = s.currentUser || { role: "kasir" };
   const role = user.role || "kasir";
+  const canManageTx = canManageTransactions(user.role);
+  const [editTx, setEditTx] = useState(null);
   const showExport = canDo(user.role, "hubungkanWeb");
   const myWallets = visibleWallets(s.wallets, user);
-  const scopedBase = visibleTransactions(s.transactions, s.wallets, user);
+  const scopedBase = visibleTransactionsForBusiness(s.transactions, s.wallets, user, business);
   const [range, setRange] = useState("Harian");
   const [anchorDate, setAnchorDate] = useState(today());
   const [customStart, setCustomStart] = useState(isoOffset(-6));
@@ -1230,9 +1372,21 @@ function Laporan({ s, onOpenPair, onOpenPurchasingReport }) {
   const inCats = visibleCategories(s.categories, user, "in");
   const outCats = visibleCategories(s.categories, user, "out");
 
+  const txDetail = useMemo(
+    () => filterTransactions(scopedBase, {
+      start: bounds.start,
+      end: bounds.end,
+      walletId,
+      catIn,
+      catOut,
+      includeTransfer: canManageTx,
+    }),
+    [scopedBase, bounds, walletId, catIn, catOut, canManageTx]
+  );
+
   const txSorted = useMemo(
-    () => [...tx].filter(t => t.type === "in" || t.type === "out").sort((a, b) => b.date.localeCompare(a.date) || (b.id > a.id ? 1 : -1)),
-    [tx]
+    () => [...txDetail].sort((a, b) => b.date.localeCompare(a.date) || (b.id > a.id ? 1 : -1)),
+    [txDetail]
   );
 
   const scopeLabel = user.role === "kasir"
@@ -1240,7 +1394,7 @@ function Laporan({ s, onOpenPair, onOpenPurchasingReport }) {
     : walletId !== "all"
       ? (myWallets.find(w => w.id === walletId)?.name || "Dompet")
       : "Semua dompet";
-  const ui = getAccountUi(user);
+  const ui = getAccountUi(user, business);
 
   const waKeuangan = useMemo(() => formatKeuanganWa({
     periodLabel,
@@ -1257,7 +1411,7 @@ function Laporan({ s, onOpenPair, onOpenPurchasingReport }) {
         <span style={{ fontSize: 20, fontWeight: 800, color: "var(--ink)" }}>{ui.laporanTitle}</span>
       </div>
 
-      {(role === "purchasing" || canDo(role, "kelolaKategoriSemua")) && (
+      {(role === "purchasing" || canDo(role, "kelolaKategoriSemua")) && features?.purchasingModule && (
         <div style={{ margin: "0 16px 12px" }}>
           <Card onClick={onOpenPurchasingReport} style={{ padding: "12px 14px", background: "#FEF3C7", border: "1px solid #FDE68A", cursor: "pointer" }}>
             <div style={{ fontWeight: 500, color: "var(--ink)" }}>Laporan Purchasing</div>
@@ -1397,34 +1551,50 @@ function Laporan({ s, onOpenPair, onOpenPurchasingReport }) {
       <div style={{ padding: "16px 16px 0" }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ink2)", marginBottom: 10 }}>
           Rincian transaksi ({txSorted.length})
+          {canManageTx && (
+            <span style={{ fontWeight: 500, color: "var(--ink3)", fontSize: 11, marginLeft: 6 }}>· tap untuk edit/hapus</span>
+          )}
         </div>
         {txSorted.length === 0 ? (
           <div style={{ textAlign: "center", color: "var(--ink3)", fontSize: 13, padding: "24px 0" }}>
-            Belum ada transaksi masuk/keluar pada periode ini.
+            Belum ada transaksi pada periode ini.
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {txSorted.slice(0, 50).map(t => {
               const cat = s.categories.find(c => c.id === t.categoryId);
               const w = s.wallets.find(x => x.id === t.walletId);
+              const isTrf = t.type === "transfer";
               const isIn = t.type === "in";
               const visual = resolveTxVisual(t, cat, s.wallets);
+              const policy = canManageTx ? getTransactionEditPolicy(t) : null;
+              const { from, to } = isTrf ? resolveTransferIds(t) : {};
+              const fromW = isTrf ? s.wallets.find(x => x.id === from) : null;
+              const toW = isTrf ? s.wallets.find(x => x.id === to) : null;
               return (
-                <Card key={t.id} style={{ padding: "12px 14px" }}>
+                <Card key={t.id} onClick={canManageTx && policy?.canEdit ? () => setEditTx(t) : undefined}
+                  style={{ padding: "12px 14px", cursor: canManageTx && policy?.canEdit ? "pointer" : "default", opacity: policy && !policy.canEdit ? 0.72 : 1 }}>
                   <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
                     <TxRowIcon visual={visual} size={36} />
                     <div style={{ flex: 1, minWidth: 0, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
                       <div style={{ minWidth: 0 }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--ink)" }}>{t.desc || cat?.name || "Transaksi"}</div>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--ink)" }}>{t.desc || cat?.name || (isTrf ? "Transfer" : "Transaksi")}</div>
                         <div style={{ fontSize: 12, color: "var(--ink3)", marginTop: 3 }}>
-                          {cat?.name || "—"} · {w?.name || "—"} · {shortDate(t.date)}
+                          {isTrf
+                            ? `${fromW?.name || "—"} → ${toW?.name || "—"}`
+                            : `${cat?.name || "—"} · ${w?.name || "—"}`}
+                          {" · "}{shortDate(t.date)}
                           {t.source && <span> · {t.source}</span>}
                         </div>
+                        {canManageTx && policy && !policy.canEdit && (
+                          <div style={{ fontSize: 11, color: "var(--amber)", marginTop: 4 }}>Terkunci — {policy.reason}</div>
+                        )}
                       </div>
-                      <div className="money" style={{ fontWeight: 800, fontSize: 14, color: isIn ? "var(--in-text)" : "var(--out-text)", flexShrink: 0 }}>
-                        {fmtTxAmount(t.amount, isIn ? "in" : "out", cur)}
+                      <div className="money" style={{ fontWeight: 800, fontSize: 14, color: isTrf ? "var(--brand)" : isIn ? "var(--in-text)" : "var(--out-text)", flexShrink: 0 }}>
+                        {isTrf ? "⇄ " : ""}{fmtMoney(t.amount, cur)}
                       </div>
                     </div>
+                    {canManageTx && policy?.canEdit && <ChevronRight size={16} color="var(--ink3)" style={{ flexShrink: 0, marginTop: 4 }} />}
                   </div>
                 </Card>
               );
@@ -1437,6 +1607,46 @@ function Laporan({ s, onOpenPair, onOpenPurchasingReport }) {
           </div>
         )}
       </div>
+
+      {editTx && (
+        <TransactionEditSheet
+          tx={editTx}
+          s={s}
+          onClose={() => setEditTx(null)}
+          onSave={(id, patch) => {
+            const existing = (s.transactions || []).find((t) => t.id === id);
+            if (!existing) {
+              showActionToast("Transaksi tidak ditemukan.", "error");
+              return false;
+            }
+            const errMsg = validateTransactionUpdate(existing, patch, { wallets: s.wallets, transactions: s.transactions });
+            if (errMsg) {
+              showActionToast(errMsg, "error");
+              return false;
+            }
+            mutate((st) => {
+              const i = st.transactions.findIndex((t) => t.id === id);
+              if (i >= 0) st.transactions[i] = normalizeTransaction({ ...st.transactions[i], ...patch });
+            });
+            showActionToast("Perubahan transaksi disimpan.", "success");
+            setEditTx(null);
+            return true;
+          }}
+          onDelete={(id) => {
+            const existing = (s.transactions || []).find((t) => t.id === id);
+            if (!existing || !getTransactionEditPolicy(existing).canDelete) {
+              showActionToast("Transaksi ini tidak bisa dihapus.", "error");
+              return false;
+            }
+            mutate((st) => {
+              applyTransactionDelete(st, id);
+            });
+            showActionToast("Transaksi dihapus · saldo dompet sudah disesuaikan.", "success");
+            setEditTx(null);
+            return true;
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1548,12 +1758,12 @@ function Analisis({ s, hideInsight }) {
       </div>
 
       <div style={{ padding: "8px 16px 12px", display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {[7, 14, 30].map(d => (
+        {[7, 14, 30, 90, 365].map(d => (
           <button key={d} type="button" onClick={() => handlePeriodeChange(d)}
             style={{ padding: "8px 14px", borderRadius: 99, border: "none", cursor: "pointer", fontWeight: 700, fontSize: 12,
               background: days === d ? "#6366F1" : "var(--surface)", color: days === d ? "#fff" : "var(--ink2)",
               boxShadow: days === d ? "0 2px 8px rgba(99,102,241,.35)" : "none" }}>
-            {d} hari
+            {d === 365 ? "1 tahun" : `${d} hari`}
           </button>
         ))}
       </div>
@@ -3331,7 +3541,7 @@ function AdjustSaldoScreen({ s, mutate, onClose, user }) {
 }
 
 // ─── Settings & Profil ─────────────────────────────────────
-function PengaturanScreen({ s, mutate, onClose, setOverlay, setTab, bizId, authUser, signOut, businesses, switchBusiness, businessDisplayName }) {
+function PengaturanScreen({ s, mutate, onClose, setOverlay, setTab, bizId, authUser, signOut, businesses, switchBusiness, businessDisplayName, features }) {
   const role = s.currentUser?.role || "kasir";
   const isKasir = role === "kasir";
   const isPurchasing = role === "purchasing";
@@ -3384,13 +3594,13 @@ function PengaturanScreen({ s, mutate, onClose, setOverlay, setTab, bizId, authU
           )}
           {canDo(role, "kelolaDompet") && <SRow icon={Wallet} label="Kelola Dompet" sub="Atur dompet dan pembagian uang Anda" onClick={() => setOverlay("wallets")} chev />}
           {canDo(role, "kelolaKategoriSendiri") && <SRow icon={Filter} label="Kelola Kategori" sub={canDo(role, "kelolaKategoriSemua") ? "Semua kategori transaksi" : "Kategori untuk role Anda"} onClick={() => setOverlay("categories")} chev />}
-          {canDo(role, "kelolaKategoriSemua") && (
+          {features?.purchasingModule && canDo(role, "kelolaKategoriSemua") && (
             <SRow icon={Filter} label="Kategori Purchasing" sub="Kelola kategori belanja purchasing" onClick={() => setOverlay("kategoriPurchasing")} chev />
           )}
-          {canDo(role, "kelolaKategoriSemua") && (
+          {features?.purchasingModule && canDo(role, "kelolaKategoriSemua") && (
             <SRow icon={Tags} label="Alias Barang Purchasing" sub="Review & approve pengelompokan nama barang" onClick={() => setOverlay("purchasingAliases")} chev />
           )}
-          {canInputSosmed(s.currentUser || {}, s.sosmedConfig) && (role !== "kasir" || isSosmedEnabled(s.sosmedConfig, s.currentUser?.outlet)) && (
+          {features?.sosmedReports && canInputSosmed(s.currentUser || {}, s.sosmedConfig) && (role !== "kasir" || isSosmedEnabled(s.sosmedConfig, s.currentUser?.outlet)) && (
             <SRow icon={Smartphone} label="Daily Report Sosmed" sub={`${sosmedDisplayName(s.currentUser?.outlet || "KBU")} · isi laporan hari ini`} onClick={() => setOverlay("sosmedHarian")} chev />
           )}
         </Card>
@@ -3432,7 +3642,7 @@ function PengaturanScreen({ s, mutate, onClose, setOverlay, setTab, bizId, authU
           </>
         )}
 
-        {canDo(role, "settleLaci") && (
+        {features?.settleLaci && canDo(role, "settleLaci") && (
           <>
             <Lbl>Operasional Outlet</Lbl>
             <Card style={{ marginBottom: 24 }}>
@@ -3515,8 +3725,10 @@ function PengaturanScreen({ s, mutate, onClose, setOverlay, setTab, bizId, authU
                 <SRow
                   key={b.id}
                   icon={Store}
-                  label={b.name}
-                  sub={b.id === bizId ? "Bisnis aktif sekarang" : `${ROLE_LABEL[b.role] || b.role}${b.outlet ? ` · ${b.outlet}` : ""}`}
+                  label={resolveBusinessDisplayName(b)}
+                  sub={b.id === bizId
+                    ? `${businessTypeLabel(b.type)} · bisnis aktif`
+                    : `${businessTypeLabel(b.type)} · ${ROLE_LABEL[b.role] || b.role}${b.outlet ? ` · ${b.outlet}` : ""}`}
                   val={b.id === bizId ? "✓" : undefined}
                   valColor="var(--in-text)"
                   onClick={b.id !== bizId && switchBusiness ? () => switchBusiness(b.id) : undefined}
@@ -3584,11 +3796,18 @@ function STog({ icon: Ic, label, sub, on, onToggle }) {
 }
 
 // ─── Kelola Dompet (Admin NF3 / owner only) ────────────────
-function WalletScreen({ s, mutate, onClose, user }) {
+function WalletScreen({ s, mutate, onClose, user, bizId, businesses = [], features }) {
   const [edit, setEdit] = useState(null);
   const [logoBusy, setLogoBusy] = useState(false);
   const [logoErr, setLogoErr] = useState("");
+  const [linkPicker, setLinkPicker] = useState(null);
+  const [linkBusy, setLinkBusy] = useState(false);
+  const [linkErr, setLinkErr] = useState("");
   const role = user?.role || "kasir";
+  const isOwner = role === "owner";
+  const walletSetup = s.walletSetup || createWalletSetupSeed();
+  const sharedLinks = walletSetup.sharedLinks || [];
+  const otherBusinesses = (businesses || []).filter((b) => b.id !== bizId && b.role === "owner");
 
   if (!canDo(role, "kelolaDompet")) {
     return (
@@ -3628,7 +3847,84 @@ function WalletScreen({ s, mutate, onClose, user }) {
     });
   };
 
-  const sortedWallets = sortWallets(s.wallets);
+  const sortedWallets = sortWallets(
+    s.wallets.filter((w) => w.type !== "shared" && (features?.isFnB || !isFnBOnlyWallet(w)))
+  );
+
+  const ensureWalletSetup = (d) => {
+    if (!d.walletSetup?.initialized) {
+      d.walletSetup = { ...createWalletSetupSeed(), ...(d.walletSetup || {}), initialized: true };
+    }
+    return d.walletSetup;
+  };
+
+  const refreshSharedWallets = (d) => {
+    d.wallets = rebuildWalletsWithShared(d.wallets, d.walletSetup);
+  };
+
+  const toggleSharedLink = (linkId) => {
+    mutate((d) => {
+      const setup = ensureWalletSetup(d);
+      const link = (setup.sharedLinks || []).find((l) => l.id === linkId);
+      if (link) link.enabled = !link.enabled;
+      refreshSharedWallets(d);
+    });
+  };
+
+  const removeSharedLink = (linkId) => {
+    mutate((d) => {
+      const setup = ensureWalletSetup(d);
+      setup.sharedLinks = (setup.sharedLinks || []).filter((l) => l.id !== linkId);
+      refreshSharedWallets(d);
+    });
+  };
+
+  const openLinkPicker = async (biz) => {
+    setLinkErr("");
+    setLinkBusy(true);
+    try {
+      const doc = await loadAppState(biz.id);
+      const wallets = filterShareableRemoteWallets(
+        sortWallets((doc?.wallets || []).filter((w) => w.type !== "shared" && w.active !== false))
+      );
+      if (!wallets.length) {
+        setLinkErr(`Tidak ada rekening bank aktif di ${biz.name || "bisnis tersebut"}. Hanya rekening yang boleh dihubungkan.`);
+        return;
+      }
+      setLinkPicker({ biz, wallets });
+    } catch (e) {
+      setLinkErr(e.message || "Gagal memuat dompet bisnis lain");
+    } finally {
+      setLinkBusy(false);
+    }
+  };
+
+  const addSharedLink = (biz, wallet) => {
+    if (!isCrossBusinessShareableWallet(wallet)) {
+      setLinkErr("Hanya rekening bank yang boleh dihubungkan — NF Cash, laci, dan kas tidak.");
+      setLinkPicker(null);
+      return;
+    }
+    mutate((d) => {
+      const setup = ensureWalletSetup(d);
+      const exists = (setup.sharedLinks || []).some(
+        (l) => l.sourceBusinessId === biz.id && l.sourceWalletId === wallet.id
+      );
+      if (exists) return;
+      setup.sharedLinks = [
+        ...(setup.sharedLinks || []),
+        createSharedWalletLink({
+          sourceBusinessId: biz.id,
+          sourceBusinessName: biz.name,
+          sourceWalletId: wallet.id,
+          sourceWalletName: wallet.name,
+          sourceWalletType: wallet.type,
+        }),
+      ];
+      refreshSharedWallets(d);
+    });
+    setLinkPicker(null);
+  };
 
   const toggleActive = (id) => mutate(d => {
     const w = d.wallets.find(x => x.id === id);
@@ -3668,6 +3964,7 @@ function WalletScreen({ s, mutate, onClose, user }) {
       <div style={{ padding: "16px 16px 40px", display: "flex", flexDirection: "column", gap: 10 }}>
         <div style={{ fontSize: 12, color: "var(--ink3)", marginBottom: 4, lineHeight: 1.45 }}>
           Urutan tampil di Beranda — pakai <b>↑ ↓</b> untuk mengatur posisi.
+          Tombol <b>✕ / ✓</b> = tampil atau sembunyikan di Beranda (dompet tetap ada, hanya tidak muncul).
         </div>
         {sortedWallets.map((w, idx) => {
           const bal = walletBalance(w.id, s.wallets, s.transactions);
@@ -3718,7 +4015,61 @@ function WalletScreen({ s, mutate, onClose, user }) {
           style={{ padding: 14, borderRadius: 16, border: "2px dashed var(--line)", background: "none", color: "var(--brand)", fontWeight: 600, fontSize: 14, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
           <Plus size={18} />Tambah dompet baru
         </button>
+
+        {isOwner && otherBusinesses.length > 0 && (
+          <div style={{ marginTop: 8, paddingTop: 16, borderTop: "1px solid var(--line)" }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: "var(--ink)", marginBottom: 6 }}>Rekening bank bersama (opsional)</div>
+            <div style={{ fontSize: 12, color: "var(--ink3)", lineHeight: 1.45, marginBottom: 12 }}>
+              {SHARED_WALLET_POLICY_HINT}
+            </div>
+            {linkErr && <div style={{ fontSize: 12, color: "var(--out-text)", marginBottom: 8 }}>{linkErr}</div>}
+            {sharedLinks.map((link) => (
+              <Card key={link.id} style={{ padding: "12px 14px", marginBottom: 8, opacity: link.enabled ? 1 : 0.65 }}>
+                <div style={{ display: "flex", alignItems: "center",gap: 10 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, color: "var(--ink)" }}>{link.sourceWalletName || link.label}</div>
+                    <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: 2 }}>
+                      Dari: {link.sourceBusinessName || "Bisnis lain"} · {link.enabled ? "Aktif di Beranda" : "Nonaktif — belum tampil"}
+                    </div>
+                  </div>
+                  <button type="button" onClick={() => toggleSharedLink(link.id)}
+                    style={{ padding: "6px 12px", borderRadius: 10, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700, background: link.enabled ? "var(--surface2)" : "var(--brand-soft)", color: link.enabled ? "var(--ink2)" : "var(--brand)" }}>
+                    {link.enabled ? "Matikan" : "Aktifkan"}
+                  </button>
+                  <button type="button" onClick={() => removeSharedLink(link.id)}
+                    style={{ width: 32, height: 32, borderRadius: 99, background: "var(--out-soft)", border: "none", cursor: "pointer", display: "grid", placeItems: "center", color: "var(--out)" }}>
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </Card>
+            ))}
+            <div style={{ display: "flex", flexWrap: "wrap",gap: 8, marginTop: 8 }}>
+              {otherBusinesses.map((biz) => (
+                <button key={biz.id} type="button" disabled={linkBusy} onClick={() => openLinkPicker(biz)}
+                  style={{ padding: "10px 14px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface)", fontSize: 13, fontWeight: 600, color: "var(--brand)", cursor: linkBusy ? "wait" : "pointer" }}>
+                  {linkBusy ? "Memuat…" : `+ Dari ${biz.name}`}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
+
+      {linkPicker && (
+        <div style={{ position: "absolute", inset: 0, zIndex: 35, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "flex-end" }} onClick={() => setLinkPicker(null)}>
+          <div style={{ width: "100%", background: "var(--surface)", borderRadius: "20px 20px 0 0", padding: 20, maxHeight: "70vh", overflowY: "auto" }} className="scroll-hide" onClick={(e) => e.stopPropagation()}>
+            <div style={{ fontWeight: 800, fontSize: 17, color: "var(--ink)", marginBottom: 4 }}>Pilih rekening dari {linkPicker.biz.name}</div>
+            <div style={{ fontSize: 12, color: "var(--ink3)", marginBottom: 14 }}>Hanya rekening bank — kas NF, laci, dan e-wallet tidak bisa dihubungkan.</div>
+            {linkPicker.wallets.map((w) => (
+              <button key={w.id} type="button" onClick={() => addSharedLink(linkPicker.biz, w)}
+                style={{ width: "100%", textAlign: "left", padding: "12px 14px", marginBottom: 8, borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface2)", cursor: "pointer" }}>
+                <div style={{ fontWeight: 700, color: "var(--ink)" }}>{w.name}</div>
+                <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: 2 }}>{w.type || "dompet"}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {edit && (
         <div style={{ position: "absolute", inset: 0, zIndex: 30, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "flex-end" }} onClick={() => setEdit(null)}>
@@ -4333,8 +4684,8 @@ function VoidScreen({ s, mutate, user, reviewOnly = false }) {
 }
 
 // ─── NavBar ────────────────────────────────────────────────
-function NavBar({ tab, setTab, onMic, user, micTitle, shellMaxWidth = 440 }) {
-  const cfg = navConfig(user);
+function NavBar({ tab, setTab, onMic, user, business, micTitle, shellMaxWidth = 440 }) {
+  const cfg = navConfig(user, business);
   const tabIcons = { beranda: Home, laporan: BarChart3, analisis: Sparkles, asisten: MessageCircle, void: Ban, profil: User };
 
   const renderTab = (id, label, badge = 0) => {
@@ -4351,7 +4702,7 @@ function NavBar({ tab, setTab, onMic, user, micTitle, shellMaxWidth = 440 }) {
   const left = cfg.left.map(([id, label]) => [id, label, 0]);
   const right = cfg.right.map((row) => [row[0], row[1], row[2] || 0]);
 
-  const ui = getAccountUi(user);
+  const ui = getAccountUi(user, business);
   const micGrad = ui.saldoGradient || "linear-gradient(135deg,#6366F1,#4F46E5)";
 
   return (
@@ -4382,6 +4733,7 @@ export default function NF3App(props) {
   const [cloudSyncState, setCloudSyncState] = useState("idle");
   const [syncInfo, setSyncInfo] = useState(null);
   const [loadErr, setLoadErr] = useState(null);
+  const [fnbGate, setFnbGate] = useState(null);
   const skipSaveRef = useRef(false);
   const saveQueueRef = useRef(Promise.resolve());
   const sRef = useRef(null);
@@ -4413,7 +4765,7 @@ export default function NF3App(props) {
     setLoadErr(null);
     skipSaveRef.current = true;
     try {
-      const cloudDoc = await loadState(bizId);
+      const cloudDoc = await loadState(bizId, { businessType: business?.type });
       const prev = sRef.current;
       let nextDoc = cloudDoc;
       if (prev) {
@@ -4442,7 +4794,7 @@ export default function NF3App(props) {
     } finally {
       setTimeout(() => { skipSaveRef.current = false; }, 1000);
     }
-  }, [bizId, mergeLoadedDoc]);
+  }, [bizId, business?.type, mergeLoadedDoc]);
 
   // Muat dokumen state bisnis aktif dari Supabase + suntik identitas login nyata.
   useEffect(() => {
@@ -4450,7 +4802,7 @@ export default function NF3App(props) {
     let alive = true;
     setLoadErr(null);
     setS(null);
-    loadState(bizId)
+    loadState(bizId, { businessType: business?.type })
       .then(doc => {
         if (!alive) return;
         setS(applyMemberUsers(withReconciledReports(doc), members));
@@ -4471,7 +4823,7 @@ export default function NF3App(props) {
       });
     }, 15000);
     return () => { alive = false; clearTimeout(watchdog); };
-  }, [bizId, applyMemberUsers]);
+  }, [bizId, business?.type, applyMemberUsers]);
 
   // Patch daftar staf tanpa muat ulang seluruh app_state (~3MB / ribuan transaksi).
   useEffect(() => {
@@ -4493,14 +4845,33 @@ export default function NF3App(props) {
 
   const user = useMemo(() => sessionUser(authUser), [authUser]);
   const view = useMemo(() => withSessionUser(s, authUser), [s, authUser]);
+  const features = useMemo(() => businessFeatures(business), [business]);
+  const canonicalBusiness = useMemo(() => findCanonicalInList(businesses), [businesses]);
+
+  useEffect(() => {
+    setOverlay(null);
+    setCatat(false);
+    setFnbGate(null);
+  }, [bizId]);
+
+  useEffect(() => {
+    if (!user?.role) return;
+    if (tab === "analisis" && (!canDo(user.role, "lihatAnalisis") || !features.fnbAnalisis)) setTab("beranda");
+    if (tab === "asisten" && (!showPurchasingAsistenTab(user.role) || !features.purchasingModule)) setTab("beranda");
+    if (tab === "void" && (!canDo(user.role, "inputVoid") || !features.voidOutlet)) setTab("beranda");
+  }, [tab, user?.role, features.fnbAnalisis, features.purchasingModule, features.voidOutlet]);
 
   const openOverlay = useCallback((name) => {
     if (name === "wallets" && !canDo(user.role, "kelolaDompet")) return;
     if (name === "adjustSaldo" && !canDo(user.role, "editSaldoDompet")) return;
     if (name === "broadcast" && !canDo(user.role, "kirimPengumuman")) return;
     if (name === "voidReview" && !canDo(user.role, "reviewVoidLog")) return;
+    if (!isOverlayAllowedForBusiness(name, business)) {
+      setFnbGate(name);
+      return;
+    }
     setOverlay(name);
-  }, [user.role]);
+  }, [user.role, business]);
 
   useEffect(() => {
     if (!s || !bizId || skipSaveRef.current) return;
@@ -4536,13 +4907,6 @@ export default function NF3App(props) {
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
   }, [s?.profile?.theme]);
-
-  useEffect(() => {
-    if (!user?.role) return;
-    if (tab === "analisis" && !canDo(user.role, "lihatAnalisis")) setTab("beranda");
-    if (tab === "asisten" && !showPurchasingAsistenTab(user.role)) setTab("beranda");
-    if (tab === "void" && !canDo(user.role, "inputVoid")) setTab("beranda");
-  }, [tab, user?.role]);
 
   const addTx = (d) => {
     const role = user.role || "kasir";
@@ -4627,22 +4991,33 @@ export default function NF3App(props) {
           </div>
         )}
         <div className="nf3-scroll scroll-hide">
-          {tab === "beranda"  && <Beranda s={view} setTab={setTab} setOverlay={openOverlay} hide={hide} setHide={setHide} onCloudSync={reloadFromCloud} cloudSyncState={cloudSyncState} syncInfo={syncInfo} bizId={bizId} session={session} businessDisplayName={businessDisplayName} onCatat={() => setCatat(true)} />}
-          {tab === "laporan"  && <Laporan s={view} onOpenPair={() => openOverlay("pair")} onOpenPurchasingReport={() => setOverlay("laporanPurchasing")} />}
-          {tab === "void" && canDo(user.role, "inputVoid") && <VoidScreen s={view} mutate={mutate} user={user} />}
-          {tab === "analisis" && canDo(user.role, "lihatAnalisis") && <Analisis s={view} hideInsight={(id) => mutate(d => { if (!d.hiddenInsights) d.hiddenInsights = []; d.hiddenInsights.push(id); })} />}
-          {tab === "asisten" && showPurchasingAsistenTab(user.role) && <AsistenPurchasing s={view} bizId={bizId} />}
-          {tab === "profil"   && <PengaturanScreen s={view} mutate={mutate} onClose={() => setTab("beranda")} setOverlay={openOverlay} bizId={bizId} authUser={authUser} signOut={signOut} businesses={businesses} switchBusiness={switchBusiness} businessDisplayName={businessDisplayName} />}
+          {tab === "beranda"  && <Beranda s={view} setTab={setTab} setOverlay={openOverlay} hide={hide} setHide={setHide} onCloudSync={reloadFromCloud} cloudSyncState={cloudSyncState} syncInfo={syncInfo} bizId={bizId} session={session} businessDisplayName={businessDisplayName} onCatat={() => setCatat(true)} business={business} businesses={businesses} switchBusiness={switchBusiness} features={features} />}
+          {tab === "laporan"  && <Laporan s={view} mutate={mutate} onOpenPair={() => openOverlay("pair")} onOpenPurchasingReport={() => openOverlay("laporanPurchasing")} business={business} features={features} />}
+          {tab === "void" && features.voidOutlet && canDo(user.role, "inputVoid") && <VoidScreen s={view} mutate={mutate} user={user} />}
+          {tab === "analisis" && features.fnbAnalisis && canDo(user.role, "lihatAnalisis") && <Analisis s={view} hideInsight={(id) => mutate(d => { if (!d.hiddenInsights) d.hiddenInsights = []; d.hiddenInsights.push(id); })} />}
+          {tab === "asisten" && features.purchasingModule && showPurchasingAsistenTab(user.role) && <AsistenPurchasing s={view} bizId={bizId} />}
+          {tab === "profil"   && <PengaturanScreen s={view} mutate={mutate} onClose={() => setTab("beranda")} setOverlay={openOverlay} bizId={bizId} authUser={authUser} signOut={signOut} businesses={businesses} switchBusiness={switchBusiness} businessDisplayName={businessDisplayName} features={features} />}
         </div>
         {!webMode && <PwaInstallBanner />}
-        <NavBar tab={tab} setTab={setTab} user={user}
+        <NavBar tab={tab} setTab={setTab} user={user} business={business}
           shellMaxWidth={webMode ? 1100 : 440}
-          onMic={() => setCatat(true)} micTitle={getAccountUi(user).micTitle} />
+          onMic={() => setCatat(true)} micTitle={getAccountUi(user, business).micTitle} />
 
-        {catat && user.role === "purchasing"
+        {catat && user.role === "purchasing" && features.purchasingModule
           ? <PurchasingForm s={{ ...view, business: { id: bizId } }} onSave={addTx} onClose={() => setCatat(false)} />
           : catat && <CatatTransaksi s={view} bizId={bizId} onSave={addTx} onClose={() => setCatat(false)} />}
-        {overlay === "voidReview" && canDo(user.role, "reviewVoidLog") && (
+        {fnbGate && (
+          <FnbGateSheet
+            target={fnbGate}
+            onClose={() => setFnbGate(null)}
+            canonicalName={canonicalBusiness?.name || CANONICAL_DISPLAY_NAME}
+            onSwitch={() => {
+              setFnbGate(null);
+              if (canonicalBusiness?.id && switchBusiness) switchBusiness(canonicalBusiness.id);
+            }}
+          />
+        )}
+        {overlay === "voidReview" && features.voidOutlet && canDo(user.role, "reviewVoidLog") && (
           <Sheet title="Review Void Kasir" onClose={() => setOverlay(null)}>
             <VoidScreen s={view} mutate={mutate} user={user} reviewOnly />
           </Sheet>
@@ -4651,12 +5026,12 @@ export default function NF3App(props) {
         {overlay === "notif"      && <NotifScreen s={view} user={user} mutate={mutate} onClose={() => setOverlay(null)} onCompose={() => setOverlay("broadcast")} />}
         {overlay === "broadcast" && canDo(user.role, "kirimPengumuman") && <BroadcastScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} />}
         {overlay === "adjustSaldo" && canDo(user.role, "editSaldoDompet") && <AdjustSaldoScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} />}
-        {overlay === "wallets" && canDo(user.role, "kelolaDompet") && <WalletScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} />}
+        {overlay === "wallets" && canDo(user.role, "kelolaDompet") && <WalletScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} bizId={bizId} businesses={businesses} features={features} />}
         {overlay === "categories" && <CatScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
-        {overlay === "kategoriPurchasing" && canDo(user.role, "kelolaKategoriSemua") && (
+        {overlay === "kategoriPurchasing" && features.purchasingModule && canDo(user.role, "kelolaKategoriSemua") && (
           <KategoriPurchasing s={view} mutate={mutate} onClose={() => setOverlay(null)} />
         )}
-        {overlay === "purchasingAliases" && canDo(user.role, "kelolaKategoriSemua") && (
+        {overlay === "purchasingAliases" && features.purchasingModule && canDo(user.role, "kelolaKategoriSemua") && (
           <Sheet title="Alias Barang Purchasing" onClose={() => setOverlay(null)}>
             <PurchasingAliasesReview
               bizId={bizId}
@@ -4667,21 +5042,26 @@ export default function NF3App(props) {
             />
           </Sheet>
         )}
-        {overlay === "laporanPurchasing" && (
-          <LaporanPurchasing s={view} onClose={() => setOverlay(null)} />
+        {overlay === "laporanPurchasing" && features.purchasingModule && (
+          <LaporanPurchasing
+            s={view}
+            mutate={mutate}
+            canManageTx={canDo(user.role, "kelolaTransaksi")}
+            onClose={() => setOverlay(null)}
+          />
         )}
-        {overlay === "asisten" && canUsePurchasingAsisten(user.role) && (
+        {overlay === "asisten" && features.purchasingModule && canUsePurchasingAsisten(user.role) && (
           <AsistenPurchasing s={view} bizId={bizId} onClose={() => setOverlay(null)} />
         )}
-        {overlay === "sosmedHarian" && canInputSosmed(user, s?.sosmedConfig) && <SosmedHarianScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} />}
-        {overlay === "sosmedConfig" && canDo(user.role, "settleLaci") && <SosmedConfigScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
-        {overlay === "sdmHarian" && canDo(user.role, "inputLaporanHarian") && <SdmHarianScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
-        {overlay === "laporanHarian" && canDo(user.role, "inputLaporanHarian") && <KasirHarianScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
-        {overlay === "settleLaporan" && canDo(user.role, "settleLaci") && <SettleLaporanScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
-        {overlay === "outletTargets" && canDo(user.role, "settleLaci") && <OutletTargetSettingsScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
-        {overlay === "reportChannels" && canDo(user.role, "settleLaci") && <ReportChannelSettingsScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
+        {overlay === "sosmedHarian" && features.sosmedReports && canInputSosmed(user, s?.sosmedConfig) && <SosmedHarianScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} />}
+        {overlay === "sosmedConfig" && features.sosmedReports && canDo(user.role, "settleLaci") && <SosmedConfigScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
+        {overlay === "sdmHarian" && features.kasirDaily && canDo(user.role, "inputLaporanHarian") && <SdmHarianScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
+        {overlay === "laporanHarian" && features.kasirDaily && canDo(user.role, "inputLaporanHarian") && <KasirHarianScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
+        {overlay === "settleLaporan" && features.settleLaci && canDo(user.role, "settleLaci") && <SettleLaporanScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
+        {overlay === "outletTargets" && features.settleLaci && canDo(user.role, "settleLaci") && <OutletTargetSettingsScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
+        {overlay === "reportChannels" && features.settleLaci && canDo(user.role, "settleLaci") && <ReportChannelSettingsScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
         {overlay === "pair"       && <PairScreen bizId={bizId} authUser={authUser} onClose={() => setOverlay(null)} />}
-        {bizId && user?.role && (
+        {bizId && user?.role && user.role !== "purchasing" && features.isFnB && (
           <NF3Assistant
             role={user.role === "admin" ? "keuangan" : user.role}
             outlet={user.role === "kasir" && user.outlet ? user.outlet : "semua"}
@@ -4690,6 +5070,7 @@ export default function NF3App(props) {
             bottomOffset={webMode ? 24 : 88}
           />
         )}
+        <ActionToast />
       </div>
     </div>
   );
