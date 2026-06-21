@@ -371,57 +371,56 @@ function mergeWallets(defaults, saved, { mode = "canonical" } = {}) {
 }
 
 async function loadState(bizId, { businessType } = {}) {
-  try {
-    const saved = await loadAppState(bizId);
-    if (saved && Object.keys(saved).length) {
-      const { _cloudUpdatedAt, currentUser: _cu, users: _u, ...savedClean } = saved;
-      const base = defaultState();
-      const walletSetup = savedClean.walletSetup || saved.walletSetup || null;
-      const resolvedType = walletSetup?.businessType || savedClean.profile?.businessType || saved.profile?.businessType || businessType;
-      const mergeMode = resolveWalletMergeMode(bizId, savedClean);
-      const catalog = getWalletCatalogForBusiness(bizId, resolvedType);
-      const mergedWallets = mergeWallets(
-        mergeMode === "saved-only" ? [] : catalog,
-        savedClean.wallets || saved.wallets,
-        { mode: mergeMode }
-      );
-      const wallets = rebuildWalletsWithShared(mergedWallets, walletSetup);
-      const txs = normalizeTransactions(savedClean.transactions || saved.transactions || []);
-      return {
-        ...base,
-        ...savedClean,
-        _cloudUpdatedAt,
-        walletSetup,
-        wallets,
-        categories: ensurePurchasingCategories(
-          cleanCategoryList(
-            mergeCategoriesFromDb(base.categories, savedClean.categories || saved.categories || [])
-          ),
-          cleanCategoryList
+  const saved = await loadAppState(bizId);
+  if (saved && Object.keys(saved).length) {
+    const { _cloudUpdatedAt, currentUser: _cu, users: _u, ...savedClean } = saved;
+    const base = defaultState();
+    const walletSetup = savedClean.walletSetup || saved.walletSetup || null;
+    const resolvedType = walletSetup?.businessType || savedClean.profile?.businessType || saved.profile?.businessType || businessType;
+    const mergeMode = resolveWalletMergeMode(bizId, savedClean);
+    const catalog = getWalletCatalogForBusiness(bizId, resolvedType);
+    const mergedWallets = mergeWallets(
+      mergeMode === "saved-only" ? [] : catalog,
+      savedClean.wallets || saved.wallets,
+      { mode: mergeMode }
+    );
+    const wallets = rebuildWalletsWithShared(mergedWallets, walletSetup);
+    const txs = normalizeTransactions(savedClean.transactions || saved.transactions || []);
+    return {
+      ...base,
+      ...savedClean,
+      _cloudUpdatedAt,
+      _cloudLoaded: true,
+      walletSetup,
+      wallets,
+      categories: ensurePurchasingCategories(
+        cleanCategoryList(
+          mergeCategoriesFromDb(base.categories, savedClean.categories || saved.categories || [])
         ),
-        transactions: txs,
-        profile: { ...base.profile, ...(savedClean.profile || saved.profile) },
-        automation: { ...base.automation, ...(savedClean.automation || saved.automation) },
-        dailyReports: savedClean.dailyReports || saved.dailyReports || base.dailyReports,
-        sdmReports: savedClean.sdmReports || saved.sdmReports || base.sdmReports,
-        voidLogs: savedClean.voidLogs || saved.voidLogs || base.voidLogs,
-        staffMessages: savedClean.staffMessages || saved.staffMessages || base.staffMessages,
-        sosmedReports: savedClean.sosmedReports || saved.sosmedReports || base.sosmedReports,
-        sosmedConfig: hydrateSosmedConfig(savedClean.sosmedConfig || saved.sosmedConfig),
-        outletConfig: hydrateOutletConfig({ ...base.outletConfig, ...(savedClean.outletConfig || saved.outletConfig || {}) }),
-        reportChannels: migrateReportChannelSettles(hydrateReportChannels(savedClean.reportChannels || saved.reportChannels)),
-        reportUi: hydrateReportUi(savedClean.reportUi || saved.reportUi),
-        hiddenInsights: Array.isArray(savedClean.hiddenInsights)
-          ? savedClean.hiddenInsights
-          : (Array.isArray(saved.hiddenInsights) ? saved.hiddenInsights : base.hiddenInsights),
-        rawInbox: stripDemoInbox(savedClean.rawInbox ?? saved.rawInbox ?? base.rawInbox),
-      };
-    }
-  } catch (e) { console.error(e); }
-  return defaultState();
+        cleanCategoryList
+      ),
+      transactions: txs,
+      profile: { ...base.profile, ...(savedClean.profile || saved.profile) },
+      automation: { ...base.automation, ...(savedClean.automation || saved.automation) },
+      dailyReports: savedClean.dailyReports || saved.dailyReports || base.dailyReports,
+      sdmReports: savedClean.sdmReports || saved.sdmReports || base.sdmReports,
+      voidLogs: savedClean.voidLogs || saved.voidLogs || base.voidLogs,
+      staffMessages: savedClean.staffMessages || saved.staffMessages || base.staffMessages,
+      sosmedReports: savedClean.sosmedReports || saved.sosmedReports || base.sosmedReports,
+      sosmedConfig: hydrateSosmedConfig(savedClean.sosmedConfig || saved.sosmedConfig),
+      outletConfig: hydrateOutletConfig({ ...base.outletConfig, ...(savedClean.outletConfig || saved.outletConfig || {}) }),
+      reportChannels: migrateReportChannelSettles(hydrateReportChannels(savedClean.reportChannels || saved.reportChannels)),
+      reportUi: hydrateReportUi(savedClean.reportUi || saved.reportUi),
+      hiddenInsights: Array.isArray(savedClean.hiddenInsights)
+        ? savedClean.hiddenInsights
+        : (Array.isArray(saved.hiddenInsights) ? saved.hiddenInsights : base.hiddenInsights),
+      rawInbox: stripDemoInbox(savedClean.rawInbox ?? saved.rawInbox ?? base.rawInbox),
+    };
+  }
+  return { ...defaultState(), _cloudLoaded: true };
 }
 async function saveState(bizId, s) {
-  const { currentUser, users, _systemThemeTick, _cloudUpdatedAt, ...data } = s || {};
+  const { currentUser, users, _systemThemeTick, _cloudUpdatedAt, _cloudLoaded, ...data } = s || {};
   if (data.categories) data.categories = cleanCategoryList(data.categories);
   await saveAppState(bizId, data);
 }
@@ -4797,6 +4796,7 @@ export default function NF3App(props) {
   const [loadErr, setLoadErr] = useState(null);
   const [fnbGate, setFnbGate] = useState(null);
   const skipSaveRef = useRef(false);
+  const allowSaveRef = useRef(false);
   const saveQueueRef = useRef(Promise.resolve());
   const sRef = useRef(null);
   const overlayRef = useRef(null);
@@ -4853,12 +4853,12 @@ export default function NF3App(props) {
         };
       }
       setS(mergeLoadedDoc(nextDoc));
+      allowSaveRef.current = true;
       setSyncInfo(buildSyncMeta(nextDoc, prev));
       setCloudSyncState("ok");
       setTimeout(() => setCloudSyncState("idle"), 2000);
     } catch (e) {
       setLoadErr(e.message || "Gagal memuat");
-      setS(prev => prev || mergeLoadedDoc(defaultState()));
       setCloudSyncState("err");
       setTimeout(() => setCloudSyncState("idle"), 2500);
     } finally {
@@ -4870,28 +4870,26 @@ export default function NF3App(props) {
   useEffect(() => {
     if (!bizId) return;
     let alive = true;
+    allowSaveRef.current = false;
     setLoadErr(null);
     setS(null);
     loadState(bizId, { businessType: business?.type })
       .then(doc => {
         if (!alive) return;
+        allowSaveRef.current = true;
         setS(applyMemberUsers(withReconciledReports(doc), members));
         setSyncInfo(buildSyncMeta(doc, null));
       })
       .catch(e => {
         if (!alive) return;
+        allowSaveRef.current = false;
         console.error(e);
-        setS(applyMemberUsers(defaultState(), members));
-        setLoadErr(e.message || "Gagal memuat data");
+        setLoadErr(e.message || "Gagal memuat data — data tidak disimpan agar tidak tertimpa.");
       });
     const watchdog = setTimeout(() => {
-      if (!alive) return;
-      setS(prev => {
-        if (prev) return prev;
-        setLoadErr("Memuat terlalu lama — menampilkan data default.");
-        return applyMemberUsers(defaultState(), members);
-      });
-    }, 15000);
+      if (!alive || allowSaveRef.current) return;
+      setLoadErr("Memuat terlalu lama — cek koneksi lalu muat ulang. Data awan tidak ditimpa.");
+    }, 45000);
     return () => { alive = false; clearTimeout(watchdog); };
   }, [bizId, business?.type, applyMemberUsers]);
 
@@ -4954,8 +4952,8 @@ export default function NF3App(props) {
   }, [user.role, business]);
 
   useEffect(() => {
-    if (!s || !bizId || skipSaveRef.current) return;
-    const { currentUser, users, _systemThemeTick, _cloudUpdatedAt, ...data } = s;
+    if (!s || !bizId || skipSaveRef.current || !allowSaveRef.current) return;
+    const { currentUser, users, _systemThemeTick, _cloudUpdatedAt, _cloudLoaded, ...data } = s;
     saveQueueRef.current = saveQueueRef.current
       .then(() => {
         if (skipSaveRef.current) return;
@@ -5078,8 +5076,8 @@ export default function NF3App(props) {
         {loadErr && (
           <>
             <div style={{ color: "#B91C1C", fontSize: 13, marginTop: 12, maxWidth: 320 }}>{loadErr}</div>
-            <button type="button" onClick={() => reloadFromCloud()} style={{ marginTop: 12, padding: "10px 16px", borderRadius: 10, border: "none", background: "#6366F1", color: "#fff", fontWeight: 700, cursor: "pointer" }}>
-              Coba lagi
+            <button type="button" onClick={() => { setLoadErr(null); window.location.reload(); }} style={{ marginTop: 12, padding: "10px 16px", borderRadius: 10, border: "none", background: "#6366F1", color: "#fff", fontWeight: 700, cursor: "pointer" }}>
+              Muat ulang halaman
             </button>
           </>
         )}
