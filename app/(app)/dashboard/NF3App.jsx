@@ -89,6 +89,7 @@ import { getTransactionEditPolicy, validateTransactionUpdate, applyTransactionDe
 import { isPurchasingTx } from "../../../lib/purchasingExpense";
 import { purchasingTxTitle, purchasingTxSubtitle } from "../../../lib/purchasingItems";
 import { showActionToast } from "../../../lib/actionToast";
+import { applyBalanceAdjustment, computeBalanceAdjustment } from "../../../lib/adjustSaldo";
 import { playRevisionAlertSound, playNotificationPing, unlockNotificationAudio } from "../../../lib/notificationSound";
 import ActionToast from "../../../components/ActionToast";
 
@@ -3711,70 +3712,109 @@ function AdjustSaldoScreen({ s, mutate, onClose, user }) {
   const wallets = visibleWallets(s.wallets, user);
   const [walletId, setWalletId] = useState(wallets[0]?.id || "");
   const [target, setTarget] = useState("");
+  const [err, setErr] = useState("");
+  const [doneBal, setDoneBal] = useState(null);
 
   const bal = walletId ? walletBalance(walletId, s.wallets, s.transactions) : 0;
   const targetNum = +String(target).replace(/\D/g, "") || 0;
-  const delta = targetNum - bal;
-
-  const pickCat = (type) =>
-    s.categories.find(c => c.type === type && c.active !== false && /penyesuaian|lain/i.test(c.name))
-    || s.categories.find(c => c.type === type && c.active !== false);
+  const preview = computeBalanceAdjustment(bal, targetNum);
+  const walletName = wallets.find((w) => w.id === walletId)?.name || "Dompet";
 
   const apply = () => {
-    if (!walletId || !targetNum || delta === 0) return;
-    if (delta < 0) {
-      const err = checkFloor(walletId, Math.abs(delta), s.wallets, s.transactions);
-      if (err) { alert(err); return; }
-    }
-    const isIn = delta > 0;
-    const cat = pickCat(isIn ? "in" : "out");
-    if (!cat) { alert("Kategori penyesuaian tidak ditemukan."); return; }
-    mutate(d => {
-      d.transactions.push({
-        id: "t" + Date.now() + Math.random().toString(36).slice(2, 5),
-        type: isIn ? "in" : "out",
-        amount: Math.abs(delta),
-        walletId,
-        categoryId: cat.id,
-        desc: "Penyesuaian saldo manual",
-        date: today(),
-        source: "Sesuaikan Saldo",
+    setErr("");
+    try {
+      let result = null;
+      mutate((d) => {
+        const currentBal = walletBalance(walletId, d.wallets, d.transactions);
+        result = applyBalanceAdjustment(d, {
+          walletId,
+          targetNum,
+          categories: d.categories,
+          date: today(),
+          currentBal,
+        });
       });
-    });
-    onClose();
+      if (!result) return;
+      setDoneBal(result.target);
+      setTarget("");
+      showActionToast(
+        `${walletName} disesuaikan → ${fmtMoney(result.target, cur)}`,
+        "success"
+      );
+    } catch (e) {
+      const msg = e.message || "Gagal menyesuaikan saldo";
+      setErr(msg);
+      showActionToast(msg, "error");
+    }
   };
+
+  const displayBal = doneBal != null ? doneBal : bal;
 
   return (
     <Sheet title="Sesuaikan Saldo" onClose={onClose}>
       <div style={{ padding: "16px 16px 40px", display: "flex", flexDirection: "column", gap: 14 }}>
-        <div style={{ fontSize: 13, color: "var(--ink3)", lineHeight: 1.5, padding: "10px 12px", background: "var(--surface2)", borderRadius: 10 }}>
-          Koreksi selisih saldo dompet dengan transaksi penyesuaian. Riwayat tercatat di laporan keuangan.
+        <div style={{ fontSize: 13, color: "var(--ink2)", lineHeight: 1.5, padding: "10px 12px", background: "var(--surface2)", borderRadius: 10 }}>
+          Isi <b>uang fisik / saldo rekening sekarang</b>. Sistem buat satu transaksi koreksi — saldo Beranda & Kelola Dompet berubah <b>langsung</b> setelah Terapkan.
+          <div style={{ marginTop: 8, fontSize: 12, color: "var(--ink3)" }}>
+            Saldo dompet = saldo awal + semua transaksi. Duplikat laporan kasir? Hapus laporan omset dulu, baru sesuaikan jika perlu.
+          </div>
         </div>
         <Fld label="Dompet">
-          <select value={walletId} onChange={e => { setWalletId(e.target.value); setTarget(""); }}
+          <select value={walletId} onChange={e => { setWalletId(e.target.value); setTarget(""); setDoneBal(null); setErr(""); }}
             style={{ width: "100%", padding: "11px 14px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface)", fontSize: 14, color: "var(--ink)" }}>
             {wallets.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
           </select>
         </Fld>
         {walletId && (
           <>
-            <Card style={{ padding: "14px 16px" }}>
-              <div style={{ fontSize: 12, color: "var(--ink3)" }}>Saldo sistem saat ini</div>
-              <div className="money" style={{ fontSize: 22, fontWeight: 800, color: "var(--ink)", marginTop: 4 }}>{fmtMoney(bal, cur)}</div>
+            <Card style={{ padding: "14px 16px", border: doneBal != null ? "2px solid var(--in-text)" : undefined }}>
+              <div style={{ fontSize: 12, color: "var(--ink3)" }}>
+                {doneBal != null ? "Saldo setelah penyesuaian" : "Saldo sistem saat ini"}
+              </div>
+              <div className="money" style={{ fontSize: 22, fontWeight: 800, color: doneBal != null ? "var(--in-text)" : "var(--ink)", marginTop: 4 }}>
+                {fmtMoney(displayBal, cur)}
+              </div>
+              {doneBal != null && (
+                <div style={{ fontSize: 12, color: "var(--in-text)", marginTop: 6, fontWeight: 600 }}>
+                  ✓ Tersimpan — cek kartu dompet di Beranda
+                </div>
+              )}
             </Card>
-            <Fld label="Saldo seharusnya (Rp)">
-              <input inputMode="numeric" value={target} onChange={e => setTarget(e.target.value.replace(/\D/g, ""))} placeholder="Masukkan saldo fisik / rekening"
-                style={{ width: "100%", padding: "11px 14px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface)", fontSize: 14, color: "var(--ink)", outline: "none" }} />
+            <Fld label="Uang fisik / saldo rekening sekarang (Rp)">
+              <div style={{ display: "flex", alignItems: "center", border: "1px solid var(--line)", borderRadius: 12, background: "var(--surface)" }}>
+                <span style={{ padding: "0 12px", color: "var(--ink3)", fontWeight: 700 }}>Rp</span>
+                <input
+                  inputMode="numeric"
+                  value={target ? new Intl.NumberFormat("id-ID").format(target) : ""}
+                  onChange={e => { setTarget(e.target.value.replace(/\D/g, "")); setDoneBal(null); setErr(""); }}
+                  placeholder="Hitung uang di laci / cek rekening"
+                  style={{ flex: 1, padding: "13px 0", background: "none", border: "none", fontSize: 16, fontWeight: 700, color: "var(--ink)", outline: "none" }}
+                />
+              </div>
             </Fld>
-            {targetNum > 0 && delta !== 0 && (
-              <div style={{ fontSize: 13, fontWeight: 600, color: delta > 0 ? "var(--in-text)" : "var(--out-text)" }}>
-                {delta > 0 ? "Tambah" : "Kurangi"} {fmtMoney(Math.abs(delta), cur)} via penyesuaian
+            {preview.ok && (
+              <div style={{ fontSize: 13, fontWeight: 600, color: preview.delta > 0 ? "var(--in-text)" : "var(--out-text)", lineHeight: 1.45 }}>
+                {preview.delta > 0 ? "Tambah" : "Kurangi"} {fmtMoney(preview.amount, cur)} via penyesuaian
+                <div style={{ fontSize: 12, color: "var(--ink3)", fontWeight: 500, marginTop: 4 }}>
+                  Setelah terapkan: {fmtMoney(preview.target, cur)}
+                </div>
               </div>
             )}
-            <button disabled={!targetNum || delta === 0} onClick={apply}
-              style={{ width: "100%", padding: 14, borderRadius: 14, border: "none", background: targetNum && delta !== 0 ? "var(--brand)" : "var(--ink3)", opacity: targetNum && delta !== 0 ? 1 : .5, color: "#fff", fontWeight: 700, cursor: targetNum && delta !== 0 ? "pointer" : "default" }}>
+            {err && (
+              <div style={{ padding: 10, borderRadius: 10, background: "var(--out-soft)", color: "var(--out-text)", fontSize: 13 }}>
+                {err}
+              </div>
+            )}
+            <button disabled={!preview.ok} onClick={apply}
+              style={{ width: "100%", padding: 14, borderRadius: 14, border: "none", background: preview.ok ? "var(--brand)" : "var(--ink3)", opacity: preview.ok ? 1 : .5, color: "#fff", fontWeight: 700, cursor: preview.ok ? "pointer" : "default" }}>
               Terapkan penyesuaian
             </button>
+            {doneBal != null && (
+              <button type="button" onClick={onClose}
+                style={{ width: "100%", padding: 12, borderRadius: 12, border: "none", background: "var(--brand)", color: "#fff", fontWeight: 700, cursor: "pointer" }}>
+                Selesai — kembali ke Beranda
+              </button>
+            )}
           </>
         )}
       </div>
@@ -4392,6 +4432,9 @@ function WalletScreen({ s, mutate, onClose, user, bizId, businesses = [], featur
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <Fld label="Saldo awal (Rp)">
                   <input inputMode="numeric" value={edit.opening ? new Intl.NumberFormat("id-ID").format(edit.opening) : ""} onChange={e => setEdit({ ...edit, opening: +e.target.value.replace(/\D/g, "") })} placeholder="0" style={{ width: "100%", padding: "11px 14px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface)", fontSize: 14, color: "var(--ink)", outline: "none" }} />
+                  <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: 6, lineHeight: 1.4 }}>
+                    Saldo tampilan = saldo awal + transaksi. Untuk sesuaikan uang fisik, pakai Atur → Sesuaikan Saldo.
+                  </div>
                 </Fld>
                 <Fld label="Floor minimum (Rp)">
                   <input inputMode="numeric" value={edit.floor ? new Intl.NumberFormat("id-ID").format(edit.floor) : ""} onChange={e => setEdit({ ...edit, floor: +e.target.value.replace(/\D/g, "") })} placeholder="0" style={{ width: "100%", padding: "11px 14px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface)", fontSize: 14, color: "var(--ink)", outline: "none" }} />
