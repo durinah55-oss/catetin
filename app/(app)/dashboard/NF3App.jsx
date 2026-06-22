@@ -29,7 +29,7 @@ import {
   getPeriodBounds, shiftAnchor, filterTransactions, buildCashflowChart,
   sumInOut, formatPeriodLabel, localISO,
 } from "../../../lib/laporanKeuangan";
-import { submitDailyReport, resubmitDailyReport, settleDailyReport, verifyDailyReportAdmin, requestDailyReportRevision, pendingReports, reportsAwaitingVerify, reportsReadyToSettle, reportsAwaitingRevision, findPendingRevisionReport, reportCashAmount, reportSettleUrgency, reportSettleDeadlineLabel, reconcileDailyReports, LACI_BY_OUTLET, LACI_FLOOR } from "../../../lib/kasirHarian";
+import { submitDailyReport, resubmitDailyReport, settleDailyReport, verifyDailyReportAdmin, requestDailyReportRevision, pendingReports, reportsAwaitingVerify, reportsReadyToSettle, reportsAwaitingRevision, findPendingRevisionReport, reportAwaitingKasirRevision, reportCashAmount, reportSettleUrgency, reportSettleDeadlineLabel, reconcileDailyReports, LACI_BY_OUTLET, LACI_FLOOR } from "../../../lib/kasirHarian";
 import { submitVoidLog, pendingVoidLogs, reviewVoidLog, visibleVoidLogs, VOID_TYPES } from "../../../lib/voidLog";
 import {
   submitSdmReport, buildSdmSnapshot, getOutletConfig, todaySdmReport,
@@ -951,7 +951,7 @@ function Beranda({ s, setTab, setOverlay, hide, setHide, onCloudSync, cloudSyncS
     ? (s.dailyReports || []).find(r => r.outlet === user.outlet && r.date === today() && r.status !== "settled")
     : null;
   const pendingRevisionReport = user.role === "kasir"
-    ? findPendingRevisionReport(s.dailyReports, user.outlet)
+    ? findPendingRevisionReport(s.dailyReports, user.outlet, s.staffMessages)
     : null;
   const needsRevision = pendingRevisionReport || (todayReport?.status === "revision_requested" ? todayReport : null);
   const todaySdm = user.role === "kasir" ? todaySdmReport(s.sdmReports, user.outlet, today()) : null;
@@ -2695,14 +2695,14 @@ function KasirHarianScreen({ s, mutate, onClose }) {
   const floor = LACI_FLOOR;
 
   const [date, setDate] = useState(() => {
-    const rev = findPendingRevisionReport(s.dailyReports, user.outlet);
+    const rev = findPendingRevisionReport(s.dailyReports, user.outlet, s.staffMessages);
     return rev?.date || today();
   });
   const dateSdm = todaySdmReport(s.sdmReports, user.outlet, date);
   const existingReport = (s.dailyReports || []).find(
     r => r.outlet === user.outlet && r.date === date && r.status !== "settled"
   );
-  const isRevision = existingReport?.status === "revision_requested";
+  const isRevision = reportAwaitingKasirRevision(existingReport, s.staffMessages, user.outlet);
   const isLocked = existingReport && !isRevision;
 
   const initAmounts = (report) => {
@@ -2740,14 +2740,14 @@ function KasirHarianScreen({ s, mutate, onClose }) {
       syncDateRef.current = date;
       draftDirtyRef.current = false;
     }
-    const forceSync = rep?.status === "revision_requested";
+    const forceSync = rep && reportAwaitingKasirRevision(rep, s.staffMessages, user.outlet);
     if (!dateChanged && draftDirtyRef.current && !submitted && !forceSync) return;
 
     setAmounts(initAmounts(rep));
     setPhysicalCashEnd(rep?.physicalCashEnd ? String(rep.physicalCashEnd) : "");
     setOpsNote(rep?.opsNote || "");
-    setSubmitted(!!rep && rep.status !== "revision_requested");
-    setLastReport(rep && rep.status !== "revision_requested" ? rep : null);
+    setSubmitted(!!rep && !reportAwaitingKasirRevision(rep, s.staffMessages, user.outlet));
+    setLastReport(rep && !reportAwaitingKasirRevision(rep, s.staffMessages, user.outlet) ? rep : null);
     setErr("");
     if (forceSync) draftDirtyRef.current = false;
   // eslint-disable-next-line react-hooks/exhaustive-deps

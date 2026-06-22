@@ -156,3 +156,6 @@ JOIN businesses b ON b.id = m.business_id
 LEFT JOIN profiles p ON p.id = m.user_id
 WHERE b.type = 'fnb'
 ORDER BY b.slug, m.role, p.email;
+
+-- 13) Recovery: paksa revisi laporan kasir (ganti id laporan & catatan)
+-- UPDATE app_state SET data = ...  (lebih aman: node scripts/fixKbuRevision21.mjs)
