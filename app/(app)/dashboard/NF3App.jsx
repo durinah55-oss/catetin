@@ -29,7 +29,7 @@ import {
   getPeriodBounds, shiftAnchor, filterTransactions, buildCashflowChart,
   sumInOut, formatPeriodLabel, localISO,
 } from "../../../lib/laporanKeuangan";
-import { submitDailyReport, resubmitDailyReport, settleDailyReport, verifyDailyReportAdmin, requestDailyReportRevision, pendingReports, reportsAwaitingVerify, reportsReadyToSettle, reportsAwaitingRevision, findPendingRevisionReport, reportAwaitingKasirRevision, reportCashAmount, reportSettleUrgency, reportSettleDeadlineLabel, reconcileDailyReports, LACI_BY_OUTLET, LACI_FLOOR } from "../../../lib/kasirHarian";
+import { submitDailyReport, resubmitDailyReport, settleDailyReport, verifyDailyReportAdmin, requestDailyReportRevision, deleteDailyReport, pendingReports, reportsAwaitingVerify, reportsReadyToSettle, reportsAwaitingRevision, findPendingRevisionReport, reportAwaitingKasirRevision, reportCashAmount, reportSettleUrgency, reportSettleDeadlineLabel, reconcileDailyReports, LACI_BY_OUTLET, LACI_FLOOR } from "../../../lib/kasirHarian";
 import { submitVoidLog, pendingVoidLogs, reviewVoidLog, visibleVoidLogs, VOID_TYPES } from "../../../lib/voidLog";
 import {
   submitSdmReport, buildSdmSnapshot, getOutletConfig, todaySdmReport,
@@ -44,7 +44,7 @@ import {
 } from "../../../lib/reportChannels";
 import {
   createStaffMessage, createRevisionRequestMessage, visibleStaffMessages, unreadStaffCount,
-  markStaffMessageRead, markRevisionMessagesRead, resolveRevisionMessages, isRevisionRequestMessage,
+  markStaffMessageRead, markRevisionMessagesRead, resolveRevisionMessages, cancelRevisionMessagesForReport, isRevisionRequestMessage,
   applyRevisionNoticesFromMessages, formatMessageTime, revisionMessageReportDate, revisionNoteForReport,
   prependStaffMessage, createPurchasingFundMessage, createDailyReportSubmittedMessage,
   createVoidPendingMessage, createDailyReportVerifiedMessage,
@@ -2741,6 +2741,7 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
   const [lastReport, setLastReport] = useState(isLocked ? existingReport : null);
   const draftDirtyRef = useRef(false);
   const syncDateRef = useRef(date);
+  const submittingRef = useRef(false);
 
   useEffect(() => {
     if (initialDate) return;
@@ -2796,6 +2797,8 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
   const showSubmittedLock = submitted && lastReport && !isRevision;
 
   const submit = () => {
+    if (submittingRef.current || submitting) return;
+    submittingRef.current = true;
     setErr("");
     setSubmitting(true);
     try {
@@ -2852,6 +2855,7 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
       setErr(e.message || "Gagal menyimpan laporan");
     } finally {
       setSubmitting(false);
+      submittingRef.current = false;
     }
   };
 
@@ -3001,7 +3005,7 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
 }
 
 // ─── Settle Laporan (Admin NF3) ────────────────────────────
-function SettleReportCard({ r, s, cur, user, onVerify, onRevision, onSettle, busy, revisingId, setRevisingId, revisionNote, setRevisionNote }) {
+function SettleReportCard({ r, s, cur, user, onVerify, onRevision, onSettle, onDelete, busy, revisingId, setRevisingId, revisionNote, setRevisionNote }) {
   const chs = getReportChannels(s, r.outlet);
   const lines = r.channels
     ? chs.map(c => ({ label: c.label, amt: Math.max(0, +(r.channels[c.id] || 0)) })).filter(x => x.amt > 0)
@@ -3115,6 +3119,12 @@ function SettleReportCard({ r, s, cur, user, onVerify, onRevision, onSettle, bus
               Minta revisi kasir
             </button>
           )}
+          {onDelete && (
+            <button type="button" disabled={busy === r.id} onClick={() => onDelete(r)}
+              style={{ width: "100%", padding: 10, borderRadius: 12, border: "1px solid var(--out-soft)", background: "var(--surface)", color: "var(--out-text)", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
+              Hapus laporan kasir
+            </button>
+          )}
         </div>
       )}
     </Card>
@@ -3192,7 +3202,34 @@ function SettleLaporanScreen({ s, mutate, onClose }) {
     setBusy(null);
   };
 
-  const cardProps = { s, cur, user, onVerify: doVerify, onRevision: doRevision, onSettle: doSettle, busy, revisingId, setRevisingId, revisionNote, setRevisionNote };
+  const doDelete = (report) => {
+    const label = `${OUTLET_LABEL[report.outlet] || report.outlet} · ${shortDate(report.date)}`;
+    const cashCount = (s.transactions || []).filter(
+      t => t.type === "in" && /laporan harian/i.test(t.source || "") && t.date === report.date
+        && (t.desc || "").includes(`Omset tunai ${report.outlet}`)
+    ).length;
+    const dupHint = cashCount > 1 ? `\n\nAkan hapus ${cashCount} transaksi omset tunai duplikat.` : "";
+    if (!confirm(`Hapus laporan ${label}?${dupHint}\n\nKasir bisa kirim laporan baru dari awal. Saldo laci disesuaikan.`)) return;
+    setErr(""); setBusy(report.id);
+    try {
+      const { report: deleted, removeIds } = deleteDailyReport(s, report.id, user);
+      mutate(d => {
+        d.dailyReports = (d.dailyReports || []).filter(r => r.id !== deleted.id);
+        removeIds.forEach(id => applyTransactionDelete(d, id));
+        d.staffMessages = cancelRevisionMessagesForReport(
+          d.staffMessages, deleted.id, deleted.date, deleted.outlet
+        );
+      });
+      setRevisingId(null);
+      setRevisionNote("");
+      showActionToast(`Laporan ${label} dihapus — kasir bisa kirim ulang.`, "success");
+    } catch (e) {
+      setErr(e.message || "Gagal hapus laporan");
+    }
+    setBusy(null);
+  };
+
+  const cardProps = { s, cur, user, onVerify: doVerify, onRevision: doRevision, onSettle: doSettle, onDelete: doDelete, busy, revisingId, setRevisingId, revisionNote, setRevisionNote };
 
   return (
     <Sheet title="Settle Laporan Kasir" onClose={onClose}>
