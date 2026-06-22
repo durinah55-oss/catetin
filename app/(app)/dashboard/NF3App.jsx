@@ -2803,6 +2803,10 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
   const total = cashAmt + nonCashTotal;
   const ready = total > 0 || (+physicalCashEnd || 0) > 0;
   const showSubmittedLock = (submitted || submitSuccess) && lastReport;
+  const canDeleteOwn =
+    canDo(user.role, "hapusLaporanOmsetSendiri")
+    && existingReport
+    && !["settled", "admin_verified"].includes(existingReport.status);
 
   const finishSubmitSuccess = (saved, { resubmit = false } = {}) => {
     submitSuccessRef.current = true;
@@ -2816,6 +2820,39 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
       "success"
     );
     setTimeout(() => successBannerRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" }), 80);
+  };
+
+  const doDeleteOwn = () => {
+    if (!existingReport || submitting || submittingRef.current) return;
+    const label = shortDate(existingReport.date);
+    if (!confirm(`Hapus laporan omset ${label}?\n\nSaldo laci disesuaikan. Anda bisa isi laporan baru dari awal.`)) return;
+    setErr("");
+    setSubmitting(true);
+    try {
+      const { report: deleted, removeIds } = deleteDailyReport(s, existingReport.id, user);
+      mutate(d => {
+        d.dailyReports = (d.dailyReports || []).filter(r => r.id !== deleted.id);
+        removeIds.forEach(id => applyTransactionDelete(d, id));
+        d.staffMessages = cancelRevisionMessagesForReport(
+          d.staffMessages, deleted.id, deleted.date, deleted.outlet
+        );
+      });
+      submitSuccessRef.current = false;
+      submittingRef.current = false;
+      setSubmitSuccess(false);
+      setSubmitted(false);
+      setLastReport(null);
+      setAmounts(initAmounts(null));
+      setPhysicalCashEnd("");
+      setOpsNote("");
+      draftDirtyRef.current = false;
+      showActionToast(`Laporan ${label} dihapus — silakan isi ulang.`, "success");
+    } catch (e) {
+      setErr(e.message || "Gagal hapus laporan");
+      showActionToast(e.message || "Gagal hapus laporan", "error");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const submit = () => {
@@ -3015,6 +3052,13 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
         )}
 
         {err && <div style={{ marginTop: 12, padding: 12, borderRadius: 10, background: "var(--out-soft)", color: "var(--out-text)", fontSize: 13 }}>{err}</div>}
+        {canDeleteOwn && !submitting && (
+          <button type="button" onClick={doDeleteOwn}
+            style={{ width: "100%", marginTop: 12, marginBottom: 4, padding: 12, borderRadius: 12, border: "1px solid var(--out-soft)", background: "var(--surface)", color: "var(--out-text)", fontWeight: 700, fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+            <Trash2 size={15} />
+            {showSubmittedLock || isRevision ? "Hapus laporan & isi ulang dari awal" : "Hapus draf laporan hari ini"}
+          </button>
+        )}
         {!showSubmittedLock ? (
           <button type="button" disabled={!ready || submitting || submitSuccess} onClick={submit} style={{ width: "100%", marginTop: 16, marginBottom: 8, padding: 14, borderRadius: 14, border: "none", background: ready && !submitting ? (isRevision ? "var(--out-text)" : "var(--brand)") : "var(--ink3)", opacity: ready && !submitting ? 1 : .65, color: "#fff", fontWeight: 700, fontSize: 15, cursor: ready && !submitting && !submitSuccess ? "pointer" : "default", position: "relative", zIndex: 2 }}>
             {submitting ? "⏳ Menyimpan… jangan tap lagi" : isRevision ? "Kirim revisi →" : "Kirim laporan →"}
@@ -3042,8 +3086,9 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
 }
 
 // ─── Settle Laporan (Admin NF3) ────────────────────────────
-function DeleteReportButton({ report, busy, onDelete, urgent = false }) {
+function DeleteReportButton({ report, busy, onDelete, urgent = false, label = null }) {
   if (!onDelete) return null;
+  const defaultLabel = urgent ? "Hapus laporan & bersihkan duplikat omset" : "Hapus laporan omset (belum settle)";
   return (
     <button type="button" disabled={busy === report.id} onClick={() => onDelete(report)}
       style={{
@@ -3063,7 +3108,7 @@ function DeleteReportButton({ report, busy, onDelete, urgent = false }) {
         opacity: busy === report.id ? .6 : 1,
       }}>
       <Trash2 size={urgent ? 17 : 15} />
-      {urgent ? "Hapus laporan & bersihkan duplikat omset" : "Hapus laporan omset (belum settle)"}
+      {label || defaultLabel}
     </button>
   );
 }
@@ -3153,6 +3198,17 @@ function SettleReportCard({ r, s, cur, user, onVerify, onRevision, onSettle, onD
           Menunggu kasir: {r.revisionNote}
         </div>
       )}
+      {r.status === "revision_requested" && onDelete && (
+        <div style={{ marginBottom: 10 }}>
+          <DeleteReportButton
+            report={r}
+            busy={busy}
+            onDelete={onDelete}
+            urgent
+            label="Hapus laporan omset — kasir isi ulang dari awal"
+          />
+        </div>
+      )}
       <ShareWaBtn text={formatOmsetWa(r, chs)} compact style={{ width: "100%", marginBottom: 10 }} />
       {revisingId === r.id ? (
         <div style={{ marginBottom: 10 }}>
@@ -3195,7 +3251,9 @@ function SettleReportCard({ r, s, cur, user, onVerify, onRevision, onSettle, onD
               Minta revisi kasir
             </button>
           )}
-          <DeleteReportButton report={r} busy={busy} onDelete={onDelete} />
+          {r.status !== "revision_requested" && (
+            <DeleteReportButton report={r} busy={busy} onDelete={onDelete} />
+          )}
         </div>
       )}
     </Card>
@@ -3732,6 +3790,7 @@ function AdjustSaldoScreen({ s, mutate, onClose, user }) {
           categories: d.categories,
           date: today(),
           currentBal,
+          userRole: user?.role,
         });
       });
       if (!result) return;
@@ -3754,9 +3813,9 @@ function AdjustSaldoScreen({ s, mutate, onClose, user }) {
     <Sheet title="Sesuaikan Saldo" onClose={onClose}>
       <div style={{ padding: "16px 16px 40px", display: "flex", flexDirection: "column", gap: 14 }}>
         <div style={{ fontSize: 13, color: "var(--ink2)", lineHeight: 1.5, padding: "10px 12px", background: "var(--surface2)", borderRadius: 10 }}>
-          Isi <b>uang fisik / saldo rekening sekarang</b>. Sistem buat satu transaksi koreksi — saldo Beranda & Kelola Dompet berubah <b>langsung</b> setelah Terapkan.
+          Masukkan <b>uang fisik / saldo rekening sekarang</b> — saldo sistem akan <b>diset persis</b> ke angka itu setelah Terapkan (Beranda & Kelola Dompet ikut berubah).
           <div style={{ marginTop: 8, fontSize: 12, color: "var(--ink3)" }}>
-            Saldo dompet = saldo awal + semua transaksi. Duplikat laporan kasir? Hapus laporan omset dulu, baru sesuaikan jika perlu.
+            Owner/admin: sistem mengikuti angka yang Anda masukkan. Duplikat laporan kasir? Hapus laporan omset dulu agar riwayat bersih.
           </div>
         </div>
         <Fld label="Dompet">
@@ -3793,10 +3852,12 @@ function AdjustSaldoScreen({ s, mutate, onClose, user }) {
               </div>
             </Fld>
             {preview.ok && (
-              <div style={{ fontSize: 13, fontWeight: 600, color: preview.delta > 0 ? "var(--in-text)" : "var(--out-text)", lineHeight: 1.45 }}>
-                {preview.delta > 0 ? "Tambah" : "Kurangi"} {fmtMoney(preview.amount, cur)} via penyesuaian
-                <div style={{ fontSize: 12, color: "var(--ink3)", fontWeight: 500, marginTop: 4 }}>
-                  Setelah terapkan: {fmtMoney(preview.target, cur)}
+              <div style={{ padding: "12px 14px", borderRadius: 12, background: "var(--brand-soft)", lineHeight: 1.45 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ink)" }}>
+                  Saldo akan menjadi: {fmtMoney(preview.target, cur)}
+                </div>
+                <div style={{ fontSize: 12, color: preview.delta > 0 ? "var(--in-text)" : "var(--out-text)", fontWeight: 600, marginTop: 6 }}>
+                  {preview.delta > 0 ? "Tambah" : "Kurangi"} {fmtMoney(preview.amount, cur)} (koreksi otomatis)
                 </div>
               </div>
             )}
