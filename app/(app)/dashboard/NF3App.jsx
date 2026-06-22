@@ -29,7 +29,7 @@ import {
   getPeriodBounds, shiftAnchor, filterTransactions, buildCashflowChart,
   sumInOut, formatPeriodLabel, localISO,
 } from "../../../lib/laporanKeuangan";
-import { submitDailyReport, resubmitDailyReport, settleDailyReport, verifyDailyReportAdmin, requestDailyReportRevision, pendingReports, reportsAwaitingVerify, reportsReadyToSettle, reportsAwaitingRevision, reportCashAmount, reportSettleUrgency, reportSettleDeadlineLabel, reconcileDailyReports, LACI_BY_OUTLET, LACI_FLOOR } from "../../../lib/kasirHarian";
+import { submitDailyReport, resubmitDailyReport, settleDailyReport, verifyDailyReportAdmin, requestDailyReportRevision, pendingReports, reportsAwaitingVerify, reportsReadyToSettle, reportsAwaitingRevision, findPendingRevisionReport, reportCashAmount, reportSettleUrgency, reportSettleDeadlineLabel, reconcileDailyReports, LACI_BY_OUTLET, LACI_FLOOR } from "../../../lib/kasirHarian";
 import { submitVoidLog, pendingVoidLogs, reviewVoidLog, visibleVoidLogs, VOID_TYPES } from "../../../lib/voidLog";
 import {
   submitSdmReport, buildSdmSnapshot, getOutletConfig, todaySdmReport,
@@ -950,7 +950,10 @@ function Beranda({ s, setTab, setOverlay, hide, setHide, onCloudSync, cloudSyncS
   const todayReport = user.role === "kasir"
     ? (s.dailyReports || []).find(r => r.outlet === user.outlet && r.date === today() && r.status !== "settled")
     : null;
-  const todayNeedsRevision = todayReport?.status === "revision_requested";
+  const pendingRevisionReport = user.role === "kasir"
+    ? findPendingRevisionReport(s.dailyReports, user.outlet)
+    : null;
+  const needsRevision = pendingRevisionReport || (todayReport?.status === "revision_requested" ? todayReport : null);
   const todaySdm = user.role === "kasir" ? todaySdmReport(s.sdmReports, user.outlet, today()) : null;
   const showSosmed = features.sosmedReports && canInputSosmed(user, s.sosmedConfig);
   const sosmedOutlet = user.role === "kasir" ? user.outlet : (SOSMED_OUTLETS.find(o => isSosmedEnabled(s.sosmedConfig, o)) || "KBU");
@@ -1086,21 +1089,19 @@ function Beranda({ s, setTab, setOverlay, hide, setHide, onCloudSync, cloudSyncS
             {
               id: "omset",
               title: "Laporan Omset",
-              subtitle: todayNeedsRevision
-                ? `Revisi wajib — ${todayReport.revisionNote || "perbaiki sesuai catatan admin"}`
+              subtitle: needsRevision
+                ? `Revisi wajib (${shortDate(needsRevision.date)}) — ${needsRevision.revisionNote || "perbaiki sesuai catatan admin"}`
                 : todayReport
-                  ? todayReport.status === "revision_requested"
-                    ? "Perbaiki laporan sesuai catatan admin"
-                    : todayReport.status === "admin_verified"
-                      ? `Total ${fmtMoney(todayReport.total, cur)} · menunggu settle owner/admin`
-                      : todayReport.status === "submitted"
-                        ? `Total ${fmtMoney(todayReport.total, cur)} · menunggu verifikasi admin pagi`
-                        : `Total ${fmtMoney(todayReport.total, cur)} · tercatat`
+                  ? todayReport.status === "admin_verified"
+                    ? `Total ${fmtMoney(todayReport.total, cur)} · menunggu settle owner/admin`
+                    : todayReport.status === "submitted"
+                      ? `Total ${fmtMoney(todayReport.total, cur)} · menunggu verifikasi admin pagi`
+                      : `Total ${fmtMoney(todayReport.total, cur)} · tercatat`
                   : todaySdm
                     ? `Target ${fmtMoney(dailyTarget, cur)} · isi per channel pembayaran`
                     : "Tap untuk isi · backfill tanggal lalu boleh",
-              done: !!todayReport && !todayNeedsRevision,
-              urgent: todayNeedsRevision,
+              done: !!todayReport && !needsRevision,
+              urgent: !!needsRevision,
               blocked: false,
               onClick: () => setOverlay("laporanHarian"),
             },
@@ -2693,7 +2694,10 @@ function KasirHarianScreen({ s, mutate, onClose }) {
   const todaySdm = todaySdmReport(s.sdmReports, user.outlet, today());
   const floor = LACI_FLOOR;
 
-  const [date, setDate] = useState(today());
+  const [date, setDate] = useState(() => {
+    const rev = findPendingRevisionReport(s.dailyReports, user.outlet);
+    return rev?.date || today();
+  });
   const dateSdm = todaySdmReport(s.sdmReports, user.outlet, date);
   const existingReport = (s.dailyReports || []).find(
     r => r.outlet === user.outlet && r.date === date && r.status !== "settled"
@@ -2855,8 +2859,11 @@ function KasirHarianScreen({ s, mutate, onClose }) {
           </Card>
         )}
         <Fld label="Tanggal">
-          <input type="date" value={date} onChange={e => setDate(e.target.value)} max={today()}
-            style={{ width: "100%", padding: "12px 14px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface)", fontSize: 14, color: "var(--ink)", outline: "none" }} />
+          <input type="date" value={date} onChange={e => setDate(e.target.value)} max={today()} disabled={isRevision}
+            style={{ width: "100%", padding: "12px 14px", borderRadius: 12, border: "1px solid var(--line)", background: isRevision ? "var(--surface2)" : "var(--surface)", fontSize: 14, color: "var(--ink)", outline: "none" }} />
+          {isRevision && (
+            <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: 6 }}>Tanggal terkunci saat revisi — ubah nominal sesuai catatan admin.</div>
+          )}
         </Fld>
 
         {ui.physicalCashControl && (
