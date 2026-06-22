@@ -47,6 +47,7 @@ import {
   markStaffMessageRead, markRevisionMessagesRead, resolveRevisionMessages, cancelRevisionMessagesForReport, isRevisionRequestMessage,
   applyRevisionNoticesFromMessages, formatMessageTime, revisionMessageReportDate, revisionNoteForReport,
   prependStaffMessage, createPurchasingFundMessage, createDailyReportSubmittedMessage,
+  createRevisionSubmittedAckMessage,
   createVoidPendingMessage, createDailyReportVerifiedMessage,
 } from "../../../lib/staffMessages";
 import {
@@ -2737,11 +2738,14 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
   const [opsNote, setOpsNote] = useState(existingReport?.opsNote || "");
   const [err, setErr] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [submitSuccess, setSubmitSuccess] = useState(false);
   const [submitted, setSubmitted] = useState(!!existingReport && !isRevision);
   const [lastReport, setLastReport] = useState(isLocked ? existingReport : null);
   const draftDirtyRef = useRef(false);
   const syncDateRef = useRef(date);
   const submittingRef = useRef(false);
+  const submitSuccessRef = useRef(false);
+  const successBannerRef = useRef(null);
 
   useEffect(() => {
     if (initialDate) return;
@@ -2766,7 +2770,10 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
     if (dateChanged) {
       syncDateRef.current = date;
       draftDirtyRef.current = false;
+      submitSuccessRef.current = false;
+      setSubmitSuccess(false);
     }
+    if (submitSuccessRef.current) return;
     const forceSync = rep && reportAwaitingKasirRevision(rep, s.staffMessages, user.outlet);
     if (!dateChanged && draftDirtyRef.current && !submitted && !forceSync) return;
 
@@ -2794,10 +2801,24 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
     .reduce((sum, c) => sum + Math.max(0, +(amounts[c.id] || 0)), 0);
   const total = cashAmt + nonCashTotal;
   const ready = total > 0 || (+physicalCashEnd || 0) > 0;
-  const showSubmittedLock = submitted && lastReport && !isRevision;
+  const showSubmittedLock = (submitted || submitSuccess) && lastReport;
+
+  const finishSubmitSuccess = (saved, { resubmit = false } = {}) => {
+    submitSuccessRef.current = true;
+    setSubmitSuccess(true);
+    setSubmitted(true);
+    setLastReport(saved);
+    setErr("");
+    try { navigator.vibrate?.(120); } catch { /* ignore */ }
+    showActionToast(
+      resubmit ? "✓ Revisi terkirim — tunggu verifikasi admin" : "✓ Laporan omset tersimpan",
+      "success"
+    );
+    setTimeout(() => successBannerRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" }), 80);
+  };
 
   const submit = () => {
-    if (submittingRef.current || submitting) return;
+    if (submittingRef.current || submitting || submitSuccess) return;
     submittingRef.current = true;
     setErr("");
     setSubmitting(true);
@@ -2828,10 +2849,11 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
           try {
             const nmsg = createDailyReportSubmittedMessage({ report: saved, author: user, resubmit: true });
             d.staffMessages = prependStaffMessage(d.staffMessages, nmsg, d.notificationPrefs);
+            const ack = createRevisionSubmittedAckMessage({ report: saved, author: user });
+            d.staffMessages = prependStaffMessage(d.staffMessages, ack, d.notificationPrefs);
           } catch { /* ignore */ }
         });
-        setLastReport({ ...report, opsNote: opsNote.trim(), dailyTargetAtSubmit: dailyTarget || null });
-        showActionToast("Revisi laporan terkirim — menunggu verifikasi admin", "success");
+        finishSubmitSuccess({ ...report, opsNote: opsNote.trim(), dailyTargetAtSubmit: dailyTarget || null }, { resubmit: true });
       } else {
         const { report, txs } = submitDailyReport({ ...s, currentUser: user }, payload);
         mutate(d => {
@@ -2844,18 +2866,18 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
             d.staffMessages = prependStaffMessage(d.staffMessages, nmsg, d.notificationPrefs);
           } catch { /* ignore */ }
         });
-        setLastReport({
+        finishSubmitSuccess({
           ...report,
           opsNote: opsNote.trim(),
           dailyTargetAtSubmit: dailyTarget || null,
         });
       }
-      setSubmitted(true);
     } catch (e) {
       setErr(e.message || "Gagal menyimpan laporan");
+      showActionToast(e.message || "Gagal menyimpan laporan", "error");
     } finally {
       setSubmitting(false);
-      submittingRef.current = false;
+      if (!submitSuccessRef.current) submittingRef.current = false;
     }
   };
 
@@ -2880,7 +2902,19 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
             <div style={{ marginTop: 6 }}>Target: <b>{fmtMoney(cfg.omsetPerPerson, cur)}/org × SDM</b> — SDM pagi opsional untuk backfill tanggal lalu</div>
           )}
         </div>
-        {isRevision && revisionNote && (
+        {submitSuccess && lastReport && (
+          <div ref={successBannerRef} style={{ marginBottom: 16, padding: "16px 18px", borderRadius: 14, background: "var(--in-soft)", border: "2px solid var(--in-text)", textAlign: "center" }}>
+            <div style={{ fontSize: 28, marginBottom: 6 }}>✓</div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: "var(--in-text)" }}>
+              {lastReport.resubmittedAt ? "Revisi berhasil terkirim!" : "Laporan berhasil tersimpan!"}
+            </div>
+            <div style={{ fontSize: 13, color: "var(--ink2)", marginTop: 8, lineHeight: 1.45 }}>
+              Total {fmtMoney(lastReport.total, cur)} · menunggu verifikasi admin.<br />
+              <b>Jangan kirim ulang</b> — cek Pengumuman untuk konfirmasi.
+            </div>
+          </div>
+        )}
+        {isRevision && revisionNote && !submitSuccess && (
           <div style={{ marginBottom: 14, padding: "12px 14px", borderRadius: 12, background: "var(--out-soft)", border: "1px solid #FECACA" }}>
             <div style={{ fontSize: 12, fontWeight: 800, color: "var(--out-text)", marginBottom: 4 }}>Revisi wajib dari {existingReport?.revisionRequestedByRole === "owner" ? "Owner" : "Admin Keuangan"}</div>
             <div style={{ fontSize: 13, color: "var(--ink)", lineHeight: 1.45 }}>{revisionNote}</div>
@@ -2981,17 +3015,19 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
 
         {err && <div style={{ marginTop: 12, padding: 12, borderRadius: 10, background: "var(--out-soft)", color: "var(--out-text)", fontSize: 13 }}>{err}</div>}
         {!showSubmittedLock ? (
-          <button type="button" disabled={!ready || submitting} onClick={submit} style={{ width: "100%", marginTop: 16, marginBottom: 8, padding: 14, borderRadius: 14, border: "none", background: ready ? (isRevision ? "var(--out-text)" : "var(--brand)") : "var(--ink3)", opacity: ready ? 1 : .5, color: "#fff", fontWeight: 700, fontSize: 15, cursor: ready && !submitting ? "pointer" : "default", position: "relative", zIndex: 2 }}>
-            {submitting ? "Menyimpan…" : isRevision ? "Kirim revisi →" : "Kirim laporan →"}
+          <button type="button" disabled={!ready || submitting || submitSuccess} onClick={submit} style={{ width: "100%", marginTop: 16, marginBottom: 8, padding: 14, borderRadius: 14, border: "none", background: ready && !submitting ? (isRevision ? "var(--out-text)" : "var(--brand)") : "var(--ink3)", opacity: ready && !submitting ? 1 : .65, color: "#fff", fontWeight: 700, fontSize: 15, cursor: ready && !submitting && !submitSuccess ? "pointer" : "default", position: "relative", zIndex: 2 }}>
+            {submitting ? "⏳ Menyimpan… jangan tap lagi" : isRevision ? "Kirim revisi →" : "Kirim laporan →"}
           </button>
         ) : lastReport ? (
           <>
-            <div style={{ marginTop: 16, padding: 12, borderRadius: 12, background: "var(--in-soft)", color: "var(--in-text)", fontSize: 13, textAlign: "center", fontWeight: 600 }}>
-              {lastReport.status === "admin_verified"
-                ? "✓ Diverifikasi admin · menunggu settle owner/admin"
-                : lastReport.status === "submitted"
-                  ? "✓ Laporan tersimpan · menunggu verifikasi Admin Keuangan (fisik & nota)"
-                  : "✓ Laporan omset tersimpan"}
+            <div ref={successBannerRef} style={{ marginTop: 16, padding: 12, borderRadius: 12, background: "var(--in-soft)", color: "var(--in-text)", fontSize: 13, textAlign: "center", fontWeight: 600 }}>
+              {lastReport.resubmittedAt
+                ? "✓ Revisi tersimpan · menunggu verifikasi Admin Keuangan"
+                : lastReport.status === "admin_verified"
+                  ? "✓ Diverifikasi admin · menunggu settle owner/admin"
+                  : lastReport.status === "submitted"
+                    ? "✓ Laporan tersimpan · menunggu verifikasi Admin Keuangan (fisik & nota)"
+                    : "✓ Laporan omset tersimpan"}
             </div>
             <ShareWaBtn text={formatOmsetWa(lastReport, channels)} />
             <button onClick={onClose} style={{ width: "100%", marginTop: 10, padding: 14, borderRadius: 14, border: "none", background: "var(--brand)", color: "#fff", fontWeight: 700, fontSize: 15, cursor: "pointer" }}>
@@ -3005,6 +3041,17 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
 }
 
 // ─── Settle Laporan (Admin NF3) ────────────────────────────
+function DeleteReportButton({ report, busy, onDelete }) {
+  if (!onDelete) return null;
+  return (
+    <button type="button" disabled={busy === report.id} onClick={() => onDelete(report)}
+      style={{ width: "100%", padding: 10, borderRadius: 12, border: "1px solid var(--out-soft)", background: "var(--out-soft)", color: "var(--out-text)", fontWeight: 700, fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, opacity: busy === report.id ? .6 : 1 }}>
+      <Trash2 size={15} />
+      Hapus laporan omset (belum settle)
+    </button>
+  );
+}
+
 function SettleReportCard({ r, s, cur, user, onVerify, onRevision, onSettle, onDelete, busy, revisingId, setRevisingId, revisionNote, setRevisionNote }) {
   const chs = getReportChannels(s, r.outlet);
   const lines = r.channels
@@ -3098,6 +3145,7 @@ function SettleReportCard({ r, s, cur, user, onVerify, onRevision, onSettle, onD
               Batal
             </button>
           </div>
+          <DeleteReportButton report={r} busy={busy} onDelete={onDelete} />
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -3119,12 +3167,7 @@ function SettleReportCard({ r, s, cur, user, onVerify, onRevision, onSettle, onD
               Minta revisi kasir
             </button>
           )}
-          {onDelete && (
-            <button type="button" disabled={busy === r.id} onClick={() => onDelete(r)}
-              style={{ width: "100%", padding: 10, borderRadius: 12, border: "1px solid var(--out-soft)", background: "var(--surface)", color: "var(--out-text)", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
-              Hapus laporan kasir
-            </button>
-          )}
+          <DeleteReportButton report={r} busy={busy} onDelete={onDelete} />
         </div>
       )}
     </Card>
@@ -3229,7 +3272,12 @@ function SettleLaporanScreen({ s, mutate, onClose }) {
     setBusy(null);
   };
 
-  const cardProps = { s, cur, user, onVerify: doVerify, onRevision: doRevision, onSettle: doSettle, onDelete: doDelete, busy, revisingId, setRevisingId, revisionNote, setRevisionNote };
+  const canDeleteReport = canDo(user.role, "hapusLaporanOmset");
+  const cardProps = {
+    s, cur, user, onVerify: doVerify, onRevision: doRevision, onSettle: doSettle,
+    onDelete: canDeleteReport ? doDelete : null,
+    busy, revisingId, setRevisingId, revisionNote, setRevisionNote,
+  };
 
   return (
     <Sheet title="Settle Laporan Kasir" onClose={onClose}>
@@ -3237,7 +3285,7 @@ function SettleLaporanScreen({ s, mutate, onClose }) {
         <div style={{ fontSize: 13, color: "var(--ink2)", marginBottom: 16, padding: "12px 14px", background: "var(--amber-soft)", borderRadius: 12, lineHeight: 1.5 }}>
           <b>Pagi:</b> Admin verifikasi fisik laci & nota.<br />
           <b>Siang–esok 17:00:</b> Owner/admin settle setelah cek dompet kasir.<br />
-          Salah? Tap <b>Minta revisi kasir</b> — wajib isi catatan.
+          Salah? <b>Minta revisi kasir</b> atau <b>Hapus laporan omset</b> (belum settle) — kasir bisa kirim ulang dari awal.
         </div>
         {err && <div style={{ marginBottom: 12, padding: 12, borderRadius: 10, background: "var(--out-soft)", color: "var(--out-text)", fontSize: 13 }}>{err}</div>}
 
@@ -3262,6 +3310,9 @@ function SettleLaporanScreen({ s, mutate, onClose }) {
         {awaitingRevision.length > 0 && (
           <>
             <Lbl>Menunggu revisi kasir ({awaitingRevision.length})</Lbl>
+            <div style={{ fontSize: 12, color: "var(--ink2)", marginBottom: 10, lineHeight: 1.45 }}>
+              Laporan ngawur atau duplikat? Owner/admin bisa <b>Hapus laporan omset</b> di kartu di bawah.
+            </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
               {awaitingRevision.map(r => <SettleReportCard key={r.id} r={r} {...cardProps} />)}
             </div>
