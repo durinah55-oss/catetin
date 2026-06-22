@@ -44,7 +44,8 @@ import {
 } from "../../../lib/reportChannels";
 import {
   createStaffMessage, createRevisionRequestMessage, visibleStaffMessages, unreadStaffCount,
-  markStaffMessageRead, markRevisionMessagesRead, isRevisionRequestMessage, formatMessageTime,
+  markStaffMessageRead, markRevisionMessagesRead, isRevisionRequestMessage,
+  applyRevisionNoticesFromMessages, formatMessageTime, revisionMessageReportDate,
 } from "../../../lib/staffMessages";
 import {
   submitSosmedReport, todaySosmedReport, canInputSosmed, resolveSosmedOutlet,
@@ -442,10 +443,14 @@ function sessionUser(authUser) {
 }
 
 function withReconciledReports(doc) {
-  if (!doc?.dailyReports?.length) return doc;
-  const dailyReports = reconcileDailyReports(doc.dailyReports, doc.transactions);
-  const changed = dailyReports.some((r, i) => r.status !== doc.dailyReports[i]?.status);
-  return changed ? { ...doc, dailyReports } : doc;
+  if (!doc) return doc;
+  let dailyReports = reconcileDailyReports(doc.dailyReports || [], doc.transactions || []);
+  dailyReports = applyRevisionNoticesFromMessages(dailyReports, doc.staffMessages);
+  const prev = doc.dailyReports || [];
+  const changed =
+    dailyReports.length !== prev.length
+    || dailyReports.some((r, i) => r.status !== prev[i]?.status || r.revisionNote !== prev[i]?.revisionNote);
+  return changed ? { ...doc, dailyReports } : { ...doc, dailyReports };
 }
 
 function withSessionUser(s, authUser) {
@@ -929,7 +934,7 @@ function FnbGateSheet({ target, onClose, onSwitch, canonicalName }) {
 }
 
 // ─── Beranda ───────────────────────────────────────────────
-function Beranda({ s, setTab, setOverlay, hide, setHide, onCloudSync, cloudSyncState, syncInfo, bizId, session, businessDisplayName, onCatat, business, businesses, switchBusiness, features }) {
+function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudSync, cloudSyncState, syncInfo, bizId, session, businessDisplayName, onCatat, business, businesses, switchBusiness, features }) {
   const cur = s.profile.currency;
   const prefix = today().slice(0, 7);
   const user = s.currentUser || { role: "kasir" };
@@ -1103,7 +1108,7 @@ function Beranda({ s, setTab, setOverlay, hide, setHide, onCloudSync, cloudSyncS
               done: !!todayReport && !needsRevision,
               urgent: !!needsRevision,
               blocked: false,
-              onClick: () => setOverlay("laporanHarian"),
+              onClick: () => (onOpenLaporan ? onOpenLaporan(needsRevision?.date || null) : setOverlay("laporanHarian")),
             },
           ];
           if (kasirSosmed) {
@@ -2683,7 +2688,7 @@ function SdmHarianScreen({ s, mutate, onClose }) {
 }
 
 // ─── Laporan Omset Harian (kasir) ──────────────────────────
-function KasirHarianScreen({ s, mutate, onClose }) {
+function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
   const user = s.currentUser;
   const cur = s.profile.currency;
   const cfg = getOutletConfig(s.outletConfig, user.outlet);
@@ -2695,6 +2700,7 @@ function KasirHarianScreen({ s, mutate, onClose }) {
   const floor = LACI_FLOOR;
 
   const [date, setDate] = useState(() => {
+    if (initialDate) return initialDate;
     const rev = findPendingRevisionReport(s.dailyReports, user.outlet, s.staffMessages);
     return rev?.date || today();
   });
@@ -2767,6 +2773,7 @@ function KasirHarianScreen({ s, mutate, onClose }) {
     .reduce((sum, c) => sum + Math.max(0, +(amounts[c.id] || 0)), 0);
   const total = cashAmt + nonCashTotal;
   const ready = total > 0 || (+physicalCashEnd || 0) > 0;
+  const showSubmittedLock = submitted && lastReport && !isRevision;
 
   const submit = () => {
     setErr("");
@@ -2925,18 +2932,18 @@ function KasirHarianScreen({ s, mutate, onClose }) {
           )}
         </Card>
 
-        {!submitted && (
+        {!showSubmittedLock && (
           <Card style={{ marginTop: 14, padding: "14px 16px" }}>
             <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, color: "var(--ink)" }}>Catatan (opsional)</div>
             <div style={{ fontSize: 12, color: "var(--ink3)", marginBottom: 10 }}>Untuk admin — mis. antrian panjang, mesin error, dll.</div>
-            <textarea value={opsNote} onChange={e => setOpsNote(e.target.value)} placeholder="Mis. antrian 1 jam karena 1 orang sakit…" rows={2} disabled={submitted}
+            <textarea value={opsNote} onChange={e => setOpsNote(e.target.value)} placeholder="Mis. antrian 1 jam karena 1 orang sakit…" rows={2}
               style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid var(--line)", fontSize: 13, resize: "vertical", background: "var(--surface)" }} />
           </Card>
         )}
 
         {err && <div style={{ marginTop: 12, padding: 12, borderRadius: 10, background: "var(--out-soft)", color: "var(--out-text)", fontSize: 13 }}>{err}</div>}
-        {!submitted ? (
-          <button disabled={!ready || submitting} onClick={submit} style={{ width: "100%", marginTop: 16, padding: 14, borderRadius: 14, border: "none", background: ready ? "var(--brand)" : "var(--ink3)", opacity: ready ? 1 : .5, color: "#fff", fontWeight: 700, fontSize: 15, cursor: "pointer" }}>
+        {!showSubmittedLock ? (
+          <button disabled={!ready || submitting} onClick={submit} style={{ width: "100%", marginTop: 16, padding: 14, borderRadius: 14, border: "none", background: ready ? (isRevision ? "var(--out-text)" : "var(--brand)") : "var(--ink3)", opacity: ready ? 1 : .5, color: "#fff", fontWeight: 700, fontSize: 15, cursor: "pointer" }}>
             {submitting ? "Menyimpan…" : isRevision ? "Kirim revisi →" : "Kirim laporan →"}
           </button>
         ) : lastReport ? (
@@ -4529,9 +4536,9 @@ function NotifScreen({ s, user, mutate, onClose, onCompose, onOpenLaporan }) {
   };
 
   const openRevision = (msg) => {
+    if (!onOpenLaporan) return;
     openMsg(msg);
-    onOpenLaporan?.();
-    onClose?.();
+    onOpenLaporan(revisionMessageReportDate(msg));
   };
 
   return (
@@ -4550,16 +4557,19 @@ function NotifScreen({ s, user, mutate, onClose, onCompose, onOpenLaporan }) {
           const unread = user?.id && !(n.readBy || []).includes(user.id);
           const isRevision = isRevisionRequestMessage(n);
           return (
-            <Card key={n.id} style={{ padding: 16, border: unread ? (isRevision ? "2px solid var(--out-text)" : "1px solid var(--brand)") : undefined, background: isRevision && unread ? "var(--out-soft)" : undefined }} onClick={() => openMsg(n)}>
+            <Card key={n.id} role={isRevision && onOpenLaporan ? "button" : undefined} tabIndex={isRevision && onOpenLaporan ? 0 : undefined}
+              style={{ padding: 16, border: isRevision ? "2px solid var(--out-text)" : unread ? "1px solid var(--brand)" : undefined, background: isRevision ? "var(--out-soft)" : undefined, cursor: isRevision && onOpenLaporan ? "pointer" : undefined }}
+              onClick={() => (isRevision && onOpenLaporan ? openRevision(n) : openMsg(n))}
+              onKeyDown={(e) => { if (isRevision && onOpenLaporan && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openRevision(n); } }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
                 <div style={{ fontWeight: 700, color: isRevision ? "var(--out-text)" : "var(--brand)", fontSize: 14 }}>{n.title}</div>
-                {unread && <span style={{ fontSize: 10, fontWeight: 800, padding: "2px 8px", borderRadius: 99, background: isRevision ? "#FEE2E2" : "var(--brand-soft)", color: isRevision ? "var(--out-text)" : "var(--brand)", flexShrink: 0 }}>{isRevision ? "Wajib" : "Baru"}</span>}
+                {(unread || isRevision) && <span style={{ fontSize: 10, fontWeight: 800, padding: "2px 8px", borderRadius: 99, background: isRevision ? "#FEE2E2" : "var(--brand-soft)", color: isRevision ? "var(--out-text)" : "var(--brand)", flexShrink: 0 }}>{isRevision ? "Tap untuk revisi" : "Baru"}</span>}
               </div>
               <div style={{ fontSize: 13, color: "var(--ink)", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{n.body}</div>
               {isRevision && onOpenLaporan && (
                 <button type="button" onClick={(e) => { e.stopPropagation(); openRevision(n); }}
-                  style={{ width: "100%", marginTop: 12, padding: 12, borderRadius: 12, border: "none", background: "var(--brand)", color: "#fff", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>
-                  Buka Laporan Omset →
+                  style={{ width: "100%", marginTop: 12, padding: 12, borderRadius: 12, border: "none", background: "var(--out-text)", color: "#fff", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>
+                  Buka form revisi tanggal {shortDate(revisionMessageReportDate(n) || "")} →
                 </button>
               )}
               <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: 8 }}>
@@ -4827,6 +4837,7 @@ export default function NF3App(props) {
   const [syncInfo, setSyncInfo] = useState(null);
   const [loadErr, setLoadErr] = useState(null);
   const [fnbGate, setFnbGate] = useState(null);
+  const [laporanInitialDate, setLaporanInitialDate] = useState(null);
   const skipSaveRef = useRef(false);
   const allowSaveRef = useRef(false);
   const saveQueueRef = useRef(Promise.resolve());
@@ -5004,6 +5015,11 @@ export default function NF3App(props) {
     setOverlay(name);
   }, [user.role, business]);
 
+  const openLaporanHarian = useCallback((date = null) => {
+    setLaporanInitialDate(date);
+    openOverlay("laporanHarian");
+  }, [openOverlay]);
+
   useEffect(() => {
     if (!s || !bizId || skipSaveRef.current || !allowSaveRef.current) return;
     const { currentUser, users, _systemThemeTick, _cloudUpdatedAt, _cloudLoaded, ...data } = s;
@@ -5150,7 +5166,7 @@ export default function NF3App(props) {
           </div>
         )}
         <div className="nf3-scroll scroll-hide">
-          {tab === "beranda"  && <Beranda s={view} setTab={setTab} setOverlay={openOverlay} hide={hide} setHide={setHide} onCloudSync={reloadFromCloud} cloudSyncState={cloudSyncState} syncInfo={syncInfo} bizId={bizId} session={session} businessDisplayName={businessDisplayName} onCatat={() => setCatat(true)} business={business} businesses={businesses} switchBusiness={switchBusiness} features={features} />}
+          {tab === "beranda"  && <Beranda s={view} setTab={setTab} setOverlay={openOverlay} onOpenLaporan={openLaporanHarian} hide={hide} setHide={setHide} onCloudSync={reloadFromCloud} cloudSyncState={cloudSyncState} syncInfo={syncInfo} bizId={bizId} session={session} businessDisplayName={businessDisplayName} onCatat={() => setCatat(true)} business={business} businesses={businesses} switchBusiness={switchBusiness} features={features} />}
           {tab === "laporan"  && <Laporan s={view} mutate={mutate} onOpenPair={() => openOverlay("pair")} onOpenPurchasingReport={() => openOverlay("laporanPurchasing")} business={business} features={features} />}
           {tab === "void" && features.voidOutlet && canDo(user.role, "inputVoid") && <VoidScreen s={view} mutate={mutate} user={user} />}
           {tab === "analisis" && features.fnbAnalisis && canDo(user.role, "lihatAnalisis") && <Analisis s={view} hideInsight={(id) => mutate(d => { if (!d.hiddenInsights) d.hiddenInsights = []; d.hiddenInsights.push(id); })} />}
@@ -5193,7 +5209,7 @@ export default function NF3App(props) {
           </Sheet>
         )}
         {overlay === "inbox"      && canDo(user.role, "inputIncome") && <InboxScreen s={view} onClose={() => setOverlay(null)} onAccept={acceptDraft} onDismiss={dismiss} onAddDraft={addInboxDraft} />}
-        {overlay === "notif"      && <NotifScreen s={view} user={user} mutate={mutate} onClose={() => setOverlay(null)} onCompose={() => setOverlay("broadcast")} onOpenLaporan={() => openOverlay("laporanHarian")} />}
+        {overlay === "notif"      && <NotifScreen s={view} user={user} mutate={mutate} onClose={() => setOverlay(null)} onCompose={() => setOverlay("broadcast")} onOpenLaporan={openLaporanHarian} />}
         {overlay === "broadcast" && canDo(user.role, "kirimPengumuman") && <BroadcastScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} />}
         {overlay === "adjustSaldo" && canDo(user.role, "editSaldoDompet") && <AdjustSaldoScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} />}
         {overlay === "wallets" && canDo(user.role, "kelolaDompet") && <WalletScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} bizId={bizId} businesses={businesses} features={features} />}
@@ -5226,7 +5242,7 @@ export default function NF3App(props) {
         {overlay === "sosmedHarian" && features.sosmedReports && canInputSosmed(user, s?.sosmedConfig) && <SosmedHarianScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} />}
         {overlay === "sosmedConfig" && features.sosmedReports && canDo(user.role, "settleLaci") && <SosmedConfigScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
         {overlay === "sdmHarian" && features.kasirDaily && canDo(user.role, "inputLaporanHarian") && <SdmHarianScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
-        {overlay === "laporanHarian" && features.kasirDaily && canDo(user.role, "inputLaporanHarian") && <KasirHarianScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
+        {overlay === "laporanHarian" && features.kasirDaily && canDo(user.role, "inputLaporanHarian") && <KasirHarianScreen key={laporanInitialDate || "today"} s={view} mutate={mutate} initialDate={laporanInitialDate} onClose={() => { setLaporanInitialDate(null); setOverlay(null); }} />}
         {overlay === "settleLaporan" && features.settleLaci && canDo(user.role, "settleLaci") && <SettleLaporanScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
         {overlay === "outletTargets" && features.settleLaci && canDo(user.role, "settleLaci") && <OutletTargetSettingsScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
         {overlay === "reportChannels" && features.settleLaci && canDo(user.role, "settleLaci") && <ReportChannelSettingsScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
