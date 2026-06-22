@@ -43,8 +43,8 @@ import {
   factoryChannelsForOutlet, factoryUiForOutlet, createChannelId, appendCustomReportChannel,
 } from "../../../lib/reportChannels";
 import {
-  createStaffMessage, visibleStaffMessages, unreadStaffCount,
-  markStaffMessageRead, formatMessageTime,
+  createStaffMessage, createRevisionRequestMessage, visibleStaffMessages, unreadStaffCount,
+  markStaffMessageRead, markRevisionMessagesRead, isRevisionRequestMessage, formatMessageTime,
 } from "../../../lib/staffMessages";
 import {
   submitSosmedReport, todaySosmedReport, canInputSosmed, resolveSosmedOutlet,
@@ -2792,6 +2792,9 @@ function KasirHarianScreen({ s, mutate, onClose }) {
           }
           d.transactions = (d.transactions || []).filter(t => !removeIds.includes(t.id));
           txs.forEach(t => d.transactions.push(t));
+          if (user?.id) {
+            d.staffMessages = markRevisionMessagesRead(d.staffMessages, existingReport.id, user.id);
+          }
         });
         setLastReport({ ...report, opsNote: opsNote.trim(), dailyTargetAtSubmit: dailyTarget || null });
       } else {
@@ -3112,7 +3115,13 @@ function SettleLaporanScreen({ s, mutate, onClose }) {
     setErr(""); setBusy(reportId);
     try {
       const updated = requestDailyReportRevision(s, reportId, user, revisionNote);
-      patchReport(reportId, updated);
+      const msg = createRevisionRequestMessage({ report: updated, note: revisionNote, author: user });
+      mutate(d => {
+        const i = (d.dailyReports || []).findIndex(r => r.id === reportId);
+        if (i >= 0) d.dailyReports[i] = updated;
+        if (!d.staffMessages) d.staffMessages = [];
+        d.staffMessages.unshift(msg);
+      });
       setRevisingId(null);
       setRevisionNote("");
     } catch (e) {
@@ -4509,7 +4518,7 @@ function BroadcastScreen({ s, mutate, onClose, user }) {
 }
 
 // ─── Notif ─────────────────────────────────────────────────
-function NotifScreen({ s, user, mutate, onClose, onCompose }) {
+function NotifScreen({ s, user, mutate, onClose, onCompose, onOpenLaporan }) {
   const items = visibleStaffMessages(s.staffMessages, user);
   const canSend = canDo(user.role, "kirimPengumuman");
 
@@ -4517,6 +4526,12 @@ function NotifScreen({ s, user, mutate, onClose, onCompose }) {
     if (user?.id) {
       mutate(d => { d.staffMessages = markStaffMessageRead(d.staffMessages, msg.id, user.id); });
     }
+  };
+
+  const openRevision = (msg) => {
+    openMsg(msg);
+    onOpenLaporan?.();
+    onClose?.();
   };
 
   return (
@@ -4529,17 +4544,24 @@ function NotifScreen({ s, user, mutate, onClose, onCompose }) {
         )}
         {items.length === 0 ? (
           <div style={{ textAlign: "center", padding: "40px 16px", color: "var(--ink3)", fontSize: 13 }}>
-            Belum ada pengumuman.{canSend ? " Gunakan tombol di atas untuk kirim instruksi ke kasir." : " Admin NF3 akan mengirim info operasional di sini."}
+            Belum ada pengumuman.{canSend ? " Gunakan tombol di atas untuk kirim instruksi ke kasir." : " Admin NF3 akan mengirim info operasional di sini — termasuk permintaan revisi laporan omset."}
           </div>
         ) : items.map(n => {
           const unread = user?.id && !(n.readBy || []).includes(user.id);
+          const isRevision = isRevisionRequestMessage(n);
           return (
-            <Card key={n.id} style={{ padding: 16, border: unread ? "1px solid var(--brand)" : undefined }} onClick={() => openMsg(n)}>
+            <Card key={n.id} style={{ padding: 16, border: unread ? (isRevision ? "2px solid var(--out-text)" : "1px solid var(--brand)") : undefined, background: isRevision && unread ? "var(--out-soft)" : undefined }} onClick={() => openMsg(n)}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
-                <div style={{ fontWeight: 700, color: "var(--brand)", fontSize: 14 }}>{n.title}</div>
-                {unread && <span style={{ fontSize: 10, fontWeight: 800, padding: "2px 8px", borderRadius: 99, background: "var(--brand-soft)", color: "var(--brand)", flexShrink: 0 }}>Baru</span>}
+                <div style={{ fontWeight: 700, color: isRevision ? "var(--out-text)" : "var(--brand)", fontSize: 14 }}>{n.title}</div>
+                {unread && <span style={{ fontSize: 10, fontWeight: 800, padding: "2px 8px", borderRadius: 99, background: isRevision ? "#FEE2E2" : "var(--brand-soft)", color: isRevision ? "var(--out-text)" : "var(--brand)", flexShrink: 0 }}>{isRevision ? "Wajib" : "Baru"}</span>}
               </div>
               <div style={{ fontSize: 13, color: "var(--ink)", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{n.body}</div>
+              {isRevision && onOpenLaporan && (
+                <button type="button" onClick={(e) => { e.stopPropagation(); openRevision(n); }}
+                  style={{ width: "100%", marginTop: 12, padding: 12, borderRadius: 12, border: "none", background: "var(--brand)", color: "#fff", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>
+                  Buka Laporan Omset →
+                </button>
+              )}
               <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: 8 }}>
                 {formatMessageTime(n.createdAt)} · {n.createdBy}
                 {n.target?.type === "outlet" && ` · ${n.target.value}`}
@@ -4811,6 +4833,7 @@ export default function NF3App(props) {
   const sRef = useRef(null);
   const overlayRef = useRef(null);
   const catatRef = useRef(false);
+  const revisionNotifiedRef = useRef(new Set());
 
   useEffect(() => { sRef.current = s; }, [s]);
   useEffect(() => { overlayRef.current = overlay; }, [overlay]);
@@ -4928,6 +4951,26 @@ export default function NF3App(props) {
   const view = useMemo(() => withSessionUser(s, authUser), [s, authUser]);
   const features = useMemo(() => businessFeatures(business), [business]);
   const canonicalBusiness = useMemo(() => findCanonicalInList(businesses), [businesses]);
+
+  useEffect(() => {
+    if (!s || user?.role !== "kasir" || !user?.id) return;
+    visibleStaffMessages(s.staffMessages, user)
+      .filter(m => isRevisionRequestMessage(m) && !(m.readBy || []).includes(user.id))
+      .forEach(m => {
+        if (revisionNotifiedRef.current.has(m.id)) return;
+        revisionNotifiedRef.current.add(m.id);
+        if (typeof Notification === "undefined") return;
+        try {
+          if (Notification.permission === "default") Notification.requestPermission();
+          else if (Notification.permission === "granted") {
+            new Notification(m.title || "Revisi laporan omset wajib", {
+              body: String(m.body || "").replace(/\n+/g, " ").slice(0, 140),
+              tag: "nf3-revision-" + m.id,
+            });
+          }
+        } catch { /* ignore */ }
+      });
+  }, [s?.staffMessages, user?.id, user?.role]);
 
   useEffect(() => {
     setOverlay(null);
@@ -5150,7 +5193,7 @@ export default function NF3App(props) {
           </Sheet>
         )}
         {overlay === "inbox"      && canDo(user.role, "inputIncome") && <InboxScreen s={view} onClose={() => setOverlay(null)} onAccept={acceptDraft} onDismiss={dismiss} onAddDraft={addInboxDraft} />}
-        {overlay === "notif"      && <NotifScreen s={view} user={user} mutate={mutate} onClose={() => setOverlay(null)} onCompose={() => setOverlay("broadcast")} />}
+        {overlay === "notif"      && <NotifScreen s={view} user={user} mutate={mutate} onClose={() => setOverlay(null)} onCompose={() => setOverlay("broadcast")} onOpenLaporan={() => openOverlay("laporanHarian")} />}
         {overlay === "broadcast" && canDo(user.role, "kirimPengumuman") && <BroadcastScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} />}
         {overlay === "adjustSaldo" && canDo(user.role, "editSaldoDompet") && <AdjustSaldoScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} />}
         {overlay === "wallets" && canDo(user.role, "kelolaDompet") && <WalletScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} bizId={bizId} businesses={businesses} features={features} />}
