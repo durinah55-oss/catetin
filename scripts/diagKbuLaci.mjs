@@ -103,3 +103,43 @@ if (subMsgs.length > 3) {
   console.log("  ⚠ Terlalu banyak notif submitted — kemungkinan tap ganda");
   console.log("  sample dedupeKeys:", subMsgs.slice(0, 3).map((m) => m.meta?.dedupeKey));
 }
+
+const jun21Reports = reports.filter((r) => r.date === "2026-06-21");
+console.log("\n=== Semua laporan 21 Jun ===");
+for (const r of jun21Reports) {
+  console.log(`  ${r.outlet} ${r.id} status=${r.status} total=${r.total} tunai=${r.setoranOwner ?? r.cash ?? "?"}`);
+}
+
+const lap21 = txs.filter((t) => t.date === "2026-06-21" && /laporan harian/i.test(t.source || ""));
+console.log("\nTx Laporan harian 21 Jun (semua outlet):", lap21.length);
+for (const t of lap21) {
+  console.log(`  ${t.id} ${t.walletId} Rp ${(t.amount || 0).toLocaleString("id-ID")} ${t.desc} report=${t.dailyReportId || "?"}`);
+}
+
+const dupMap = new Map();
+for (const t of txs.filter((t) => /laporan harian/i.test(t.source || "") && t.type === "in")) {
+  const k = `${t.dailyReportId || "?"}|${t.date}|${t.desc || ""}`;
+  if (!dupMap.has(k)) dupMap.set(k, []);
+  dupMap.get(k).push(t.id);
+}
+const dups = [...dupMap.entries()].filter(([, ids]) => ids.length > 1);
+console.log("\nDuplikat tx (report+date+desc sama):", dups.length);
+for (const [k, ids] of dups) console.log("  ⚠", k, "→", ids.length, "tx");
+
+if (rep) {
+  const cashAmt = rep.setoranOwner ?? rep.cash ?? 4015000;
+  const expectedBal = (w?.opening || 250000) + (lap21.filter((t) => t.walletId === WALLET).reduce((s, t) => s + (t.amount || 0), 0));
+  const lap21Kbu = lap21.filter((t) => t.walletId === WALLET);
+  console.log("\n=== Saldo vs laporan KBU 21 Jun ===");
+  console.log("  Tx tunai laci 21 Jun:", lap21Kbu.length, lap21Kbu.map((t) => t.amount));
+  console.log("  Setoran laporan:", cashAmt.toLocaleString("id-ID"));
+  console.log("  Saldo laci sekarang:", bal.toLocaleString("id-ID"));
+  console.log("  Harusnya (floor + tx 21 Jun laci):", expectedBal.toLocaleString("id-ID"));
+  if (lap21Kbu.length === 0 && rep.status !== "settled") {
+    console.log("  ⚠ TIDAK ADA tx omset tunai 21 Jun di laci — perlu tambah t_" + REPORT_ID + "_cash");
+  }
+  if (dups.length === 0) console.log("\n✓ Tidak ada duplikat tx laporan");
+  console.log("\n=== Bisa hapus? (simulasi) ===");
+  console.log("  Status:", rep.status, "→ owner/admin:", rep.status !== "settled" ? "BISA" : "TIDAK");
+  console.log("  Kasir:", rep.status === "admin_verified" ? "TIDAK (sudah diverifikasi)" : rep.status === "submitted" ? "BISA" : "tergantung status");
+}

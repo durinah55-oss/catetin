@@ -29,7 +29,7 @@ import {
   getPeriodBounds, shiftAnchor, filterTransactions, buildCashflowChart,
   sumInOut, formatPeriodLabel, localISO,
 } from "../../../lib/laporanKeuangan";
-import { submitDailyReport, resubmitDailyReport, settleDailyReport, verifyDailyReportAdmin, requestDailyReportRevision, deleteDailyReport, pendingReports, reportsAwaitingVerify, reportsReadyToSettle, reportsAwaitingRevision, findPendingRevisionReport, reportAwaitingKasirRevision, reportCashAmount, reportSettleUrgency, reportSettleDeadlineLabel, reconcileDailyReports, LACI_BY_OUTLET, LACI_FLOOR } from "../../../lib/kasirHarian";
+import { submitDailyReport, resubmitDailyReport, settleDailyReport, verifyDailyReportAdmin, requestDailyReportRevision, deleteDailyReport, pendingReports, reportsAwaitingVerify, reportsReadyToSettle, reportsAwaitingRevision, findPendingRevisionReport, reportAwaitingKasirRevision, reportCashAmount, reportSettleUrgency, reportSettleDeadlineLabel, reconcileDailyReports, allDailyReportsForAdmin, LACI_BY_OUTLET, LACI_FLOOR } from "../../../lib/kasirHarian";
 import { submitVoidLog, pendingVoidLogs, reviewVoidLog, visibleVoidLogs, VOID_TYPES } from "../../../lib/voidLog";
 import {
   submitSdmReport, buildSdmSnapshot, getOutletConfig, todaySdmReport,
@@ -49,6 +49,7 @@ import {
   prependStaffMessage, createPurchasingFundMessage, createDailyReportSubmittedMessage,
   createRevisionSubmittedAckMessage,
   createVoidPendingMessage, createDailyReportVerifiedMessage,
+  createDailyReportSettledMessage, createDailyReportDeletedMessage,
 } from "../../../lib/staffMessages";
 import {
   NOTIFICATION_CATALOG, hydrateNotificationPrefs, getStaffMessageAction,
@@ -86,6 +87,7 @@ import PwaInstallBanner, { registerServiceWorker } from "../../../components/Pwa
 import NF3Assistant from "../../../components/NF3Assistant";
 import TransactionEditSheet from "../../../components/TransactionEditSheet";
 import { getTransactionEditPolicy, validateTransactionUpdate, applyTransactionDelete } from "../../../lib/transactionEdit";
+import { recordDailyReportDelete } from "../../../lib/dailyReportDelete";
 import { isPurchasingTx } from "../../../lib/purchasingExpense";
 import { purchasingTxTitle, purchasingTxSubtitle } from "../../../lib/purchasingItems";
 import { showActionToast } from "../../../lib/actionToast";
@@ -94,7 +96,7 @@ import { playRevisionAlertSound, playNotificationPing, unlockNotificationAudio }
 import ActionToast from "../../../components/ActionToast";
 
 /** Interval muat ulang awan — jangan terlalu sering (ganggu input staf). */
-const CLOUD_POLL_MS = 3 * 60 * 1000;
+const CLOUD_POLL_MS = 45 * 1000;
 
 function isUserTypingInForm() {
   if (typeof document === "undefined") return false;
@@ -2721,6 +2723,9 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
   const existingReport = (s.dailyReports || []).find(
     r => r.outlet === user.outlet && r.date === date && r.status !== "settled"
   );
+  const settledReport = (s.dailyReports || []).find(
+    r => r.outlet === user.outlet && r.date === date && r.status === "settled"
+  );
   const isRevision = reportAwaitingKasirRevision(existingReport, s.staffMessages, user.outlet);
   const revisionNote = revisionNoteForReport(existingReport, s.staffMessages, user.outlet);
   const isLocked = existingReport && !isRevision;
@@ -2774,8 +2779,25 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
       submitSuccessRef.current = false;
       setSubmitSuccess(false);
     }
+
+    // Laporan dihapus owner / sudah settle — lepas lock lokal agar form tidak stuck
+    if (!rep) {
+      submitSuccessRef.current = false;
+      submittingRef.current = false;
+      setSubmitSuccess(false);
+      setSubmitted(false);
+      setLastReport(null);
+      setErr("");
+      if (dateChanged || !draftDirtyRef.current) {
+        setAmounts(initAmounts(null));
+        setPhysicalCashEnd("");
+        setOpsNote("");
+      }
+      return;
+    }
+
     if (submitSuccessRef.current) return;
-    const forceSync = rep && reportAwaitingKasirRevision(rep, s.staffMessages, user.outlet);
+    const forceSync = reportAwaitingKasirRevision(rep, s.staffMessages, user.outlet);
     if (!dateChanged && draftDirtyRef.current && !submitted && !forceSync) return;
 
     setAmounts(initAmounts(rep));
@@ -2833,6 +2855,7 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
       mutate(d => {
         d.dailyReports = (d.dailyReports || []).filter(r => r.id !== deleted.id);
         removeIds.forEach(id => applyTransactionDelete(d, id));
+        recordDailyReportDelete(d, deleted);
         d.staffMessages = cancelRevisionMessagesForReport(
           d.staffMessages, deleted.id, deleted.date, deleted.outlet
         );
@@ -2880,6 +2903,7 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
           const saved = { ...report, opsNote: opsNote.trim(), dailyTargetAtSubmit: dailyTarget || null };
           if (i >= 0) d.dailyReports[i] = saved;
           d.transactions = (d.transactions || []).filter(t => !removeIds.includes(t.id));
+          removeIds.forEach(id => applyTransactionDelete(d, id));
           txs.forEach(t => d.transactions.push(t));
           if (user?.id) {
             d.staffMessages = resolveRevisionMessages(d.staffMessages, existingReport.id, user.id, existingReport.date, fulfilledAt);
@@ -2940,6 +2964,23 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
             <div style={{ marginTop: 6 }}>Target: <b>{fmtMoney(cfg.omsetPerPerson, cur)}/org × SDM</b> — SDM pagi opsional untuk backfill tanggal lalu</div>
           )}
         </div>
+        {settledReport ? (
+          <>
+            <div style={{ marginBottom: 16, padding: "16px 18px", borderRadius: 14, background: "var(--in-soft)", border: "2px solid var(--in-text)", textAlign: "center" }}>
+              <div style={{ fontSize: 28, marginBottom: 6 }}>✓</div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: "var(--in-text)" }}>Laporan {shortDate(date)} sudah disettle</div>
+              <div style={{ fontSize: 13, color: "var(--ink2)", marginTop: 8, lineHeight: 1.45 }}>
+                Total {fmtMoney(settledReport.total, cur)} · tunai sudah masuk Kas Besar.<br />
+                <b>Tidak perlu kirim ulang</b> untuk tanggal ini.
+              </div>
+            </div>
+            <ShareWaBtn text={formatOmsetWa(settledReport, channels)} />
+            <button onClick={onClose} style={{ width: "100%", marginTop: 10, padding: 14, borderRadius: 14, border: "none", background: "var(--brand)", color: "#fff", fontWeight: 700, fontSize: 15, cursor: "pointer" }}>
+              Tutup
+            </button>
+          </>
+        ) : (
+        <>
         {submitSuccess && lastReport && (
           <div ref={successBannerRef} style={{ marginBottom: 16, padding: "16px 18px", borderRadius: 14, background: "var(--in-soft)", border: "2px solid var(--in-text)", textAlign: "center" }}>
             <div style={{ fontSize: 28, marginBottom: 6 }}>✓</div>
@@ -3080,12 +3121,46 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
             </button>
           </>
         ) : null}
+        </>
+        )}
       </div>
     </Sheet>
   );
 }
 
 // ─── Settle Laporan (Admin NF3) ────────────────────────────
+function HistoryReportRow({ r, cur, onDelete, busy }) {
+  const statusLabel = {
+    submitted: "Menunggu verifikasi",
+    admin_verified: "Siap settle",
+    revision_requested: "Menunggu revisi",
+    settled: "Settled",
+  }[r.status] || r.status;
+  const settled = r.status === "settled";
+  return (
+    <Card style={{ padding: "12px 14px", opacity: settled ? 0.92 : 1 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 800, fontSize: 14, color: "var(--ink)" }}>
+            {OUTLET_LABEL[r.outlet] || r.outlet} · {shortDate(r.date)}
+          </div>
+          <div style={{ fontSize: 12, color: settled ? "var(--in-text)" : "var(--ink3)", marginTop: 2, fontWeight: settled ? 600 : 400 }}>
+            {statusLabel} · {r.kasirName || "Kasir"}
+          </div>
+        </div>
+        <div className="money" style={{ fontWeight: 800, color: "var(--brand)", fontSize: 14 }}>{fmtMoney(r.total, cur)}</div>
+      </div>
+      {onDelete && (
+        <button type="button" disabled={busy === r.id} onClick={() => onDelete(r)}
+          style={{ width: "100%", marginTop: 10, padding: 9, borderRadius: 10, border: "1px solid var(--out-soft)", background: "var(--surface)", color: "var(--out-text)", fontWeight: 700, fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, opacity: busy === r.id ? .6 : 1 }}>
+          <Trash2 size={14} />
+          Hapus laporan
+        </button>
+      )}
+    </Card>
+  );
+}
+
 function DeleteReportButton({ report, busy, onDelete, urgent = false, label = null }) {
   if (!onDelete) return null;
   const defaultLabel = urgent ? "Hapus laporan & bersihkan duplikat omset" : "Hapus laporan omset (belum settle)";
@@ -3254,6 +3329,9 @@ function SettleReportCard({ r, s, cur, user, onVerify, onRevision, onSettle, onD
           {r.status !== "revision_requested" && (
             <DeleteReportButton report={r} busy={busy} onDelete={onDelete} />
           )}
+          {r.status === "revision_requested" && onDelete && (
+            <DeleteReportButton report={r} busy={busy} onDelete={onDelete} label="Hapus laporan omset — kasir isi ulang" />
+          )}
         </div>
       )}
     </Card>
@@ -3266,6 +3344,9 @@ function SettleLaporanScreen({ s, mutate, onClose }) {
   const awaitingVerify = reportsAwaitingVerify(s.dailyReports, s.transactions);
   const readyToSettle = reportsReadyToSettle(s.dailyReports, s.transactions);
   const awaitingRevision = reportsAwaitingRevision(s.dailyReports, s.transactions);
+  const allReports = allDailyReportsForAdmin(s.dailyReports, s.transactions, { days: 14 });
+  const activeIds = new Set([...awaitingVerify, ...readyToSettle, ...awaitingRevision].map(r => r.id));
+  const historyOnly = allReports.filter(r => !activeIds.has(r.id));
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(null);
   const [revisingId, setRevisingId] = useState(null);
@@ -3324,6 +3405,13 @@ function SettleLaporanScreen({ s, mutate, onClose }) {
         const i = (d.dailyReports || []).findIndex(r => r.id === reportId);
         if (i >= 0) d.dailyReports[i] = report;
         txs.forEach(t => d.transactions.push(t));
+        d.staffMessages = resolveRevisionMessages(
+          d.staffMessages, report.id, report.kasirId, report.date, report.settledAt
+        );
+        try {
+          const nmsg = createDailyReportSettledMessage({ report, author: user });
+          d.staffMessages = prependStaffMessage(d.staffMessages, nmsg, d.notificationPrefs);
+        } catch { /* ignore */ }
       });
     } catch (e) {
       setErr(e.message || "Gagal settle");
@@ -3333,21 +3421,25 @@ function SettleLaporanScreen({ s, mutate, onClose }) {
 
   const doDelete = (report) => {
     const label = `${OUTLET_LABEL[report.outlet] || report.outlet} · ${shortDate(report.date)}`;
-    const cashCount = (s.transactions || []).filter(
-      t => t.type === "in" && /laporan harian/i.test(t.source || "") && t.date === report.date
-        && (t.desc || "").includes(`Omset tunai ${report.outlet}`)
-    ).length;
-    const dupHint = cashCount > 1 ? `\n\nAkan hapus ${cashCount} transaksi omset tunai duplikat.` : "";
-    if (!confirm(`Hapus laporan ${label}?${dupHint}\n\nKasir bisa kirim laporan baru dari awal. Saldo laci disesuaikan.`)) return;
+    const txCount = (s.transactions || []).filter(t => t.dailyReportId === report.id).length;
+    const settledHint = report.status === "settled" || txCount > 1
+      ? `\n\nAkan hapus laporan + ${txCount || 0} transaksi terkait (termasuk settle jika ada). Saldo dompet disesuaikan.`
+      : "\n\nSaldo laci disesuaikan.";
+    if (!confirm(`Hapus laporan ${label}?${settledHint}\n\nKasir bisa kirim laporan baru.`)) return;
     setErr(""); setBusy(report.id);
     try {
       const { report: deleted, removeIds } = deleteDailyReport(s, report.id, user);
       mutate(d => {
         d.dailyReports = (d.dailyReports || []).filter(r => r.id !== deleted.id);
         removeIds.forEach(id => applyTransactionDelete(d, id));
+        recordDailyReportDelete(d, deleted);
         d.staffMessages = cancelRevisionMessagesForReport(
           d.staffMessages, deleted.id, deleted.date, deleted.outlet
         );
+        try {
+          const nmsg = createDailyReportDeletedMessage({ report: deleted, author: user });
+          d.staffMessages = prependStaffMessage(d.staffMessages, nmsg, d.notificationPrefs);
+        } catch { /* ignore */ }
       });
       setRevisingId(null);
       setRevisionNote("");
@@ -3369,9 +3461,7 @@ function SettleLaporanScreen({ s, mutate, onClose }) {
     <Sheet title="Settle Laporan Kasir" onClose={onClose}>
       <div style={{ padding: "16px 16px 40px" }}>
         <div style={{ fontSize: 13, color: "var(--ink2)", marginBottom: 16, padding: "12px 14px", background: "var(--amber-soft)", borderRadius: 12, lineHeight: 1.5 }}>
-          <b>Pagi:</b> Admin verifikasi fisik laci & nota.<br />
-          <b>Siang–esok 17:00:</b> Owner/admin settle setelah cek dompet kasir.<br />
-          Salah? <b>Minta revisi kasir</b> atau <b>Hapus laporan omset</b> (belum settle) — kasir bisa kirim ulang dari awal.
+          Semua laporan kasir tampil di bawah — <b>tidak disembunyikan</b>. Salah? <b>Hapus</b> lalu kasir kirim ulang. Settled juga bisa dihapus owner jika perlu koreksi.
         </div>
         {err && <div style={{ marginBottom: 12, padding: 12, borderRadius: 10, background: "var(--out-soft)", color: "var(--out-text)", fontSize: 13 }}>{err}</div>}
 
@@ -3405,8 +3495,22 @@ function SettleLaporanScreen({ s, mutate, onClose }) {
           </>
         )}
 
-        {awaitingVerify.length === 0 && readyToSettle.length === 0 && awaitingRevision.length === 0 && (
-          <div style={{ textAlign: "center", color: "var(--ink3)", padding: "32px 0" }}>Semua laporan sudah disettle.</div>
+        {awaitingVerify.length === 0 && readyToSettle.length === 0 && awaitingRevision.length === 0 && allReports.length === 0 && (
+          <div style={{ textAlign: "center", color: "var(--ink3)", padding: "24px 0" }}>Belum ada laporan omset.</div>
+        )}
+
+        {allReports.length > 0 && (
+          <>
+            <Lbl>Riwayat &amp; settled ({allReports.filter(r => !activeIds.has(r.id)).length || allReports.length})</Lbl>
+            <div style={{ fontSize: 12, color: "var(--ink2)", marginBottom: 10, lineHeight: 1.45 }}>
+              Semua laporan tampil di sini. Owner bisa <b>hapus kapan saja</b> — kasir kirim ulang setelah hapus.
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 8 }}>
+              {(historyOnly.length ? historyOnly : allReports).map(r => (
+                <HistoryReportRow key={r.id} r={r} cur={cur} onDelete={canDeleteReport ? doDelete : null} busy={busy} />
+              ))}
+            </div>
+          </>
         )}
       </div>
     </Sheet>
@@ -5214,7 +5318,8 @@ export default function NF3App(props) {
 
   const reloadFromCloud = useCallback(async () => {
     if (!bizId) return;
-    if (overlayRef.current || catatRef.current || isUserTypingInForm()) return;
+    if (catatRef.current || isUserTypingInForm()) return;
+    if (overlayRef.current === "laporanHarian") return;
 
     await saveQueueRef.current.catch(() => {});
 
@@ -5289,16 +5394,24 @@ export default function NF3App(props) {
     });
   }, [members, applyMemberUsers]);
 
-  // Auto-muat ulang dari awan (jarang + skip saat form/input aktif)
+  // Auto-muat ulang dari awan (~45 detik + saat tab aktif kembali)
   useEffect(() => {
     if (!bizId) return;
     const tick = () => {
       if (document.visibilityState !== "visible") return;
-      if (overlayRef.current || catatRef.current || isUserTypingInForm()) return;
+      if (catatRef.current || isUserTypingInForm()) return;
+      if (overlayRef.current === "laporanHarian") return;
       reloadFromCloud();
     };
     const id = setInterval(tick, CLOUD_POLL_MS);
-    return () => clearInterval(id);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [bizId, reloadFromCloud]);
 
   const user = useMemo(() => sessionUser(authUser), [authUser]);
