@@ -44,7 +44,7 @@ import {
 } from "../../../lib/reportChannels";
 import {
   createStaffMessage, createRevisionRequestMessage, visibleStaffMessages, unreadStaffCount,
-  markStaffMessageRead, markRevisionMessagesRead, isRevisionRequestMessage,
+  markStaffMessageRead, markRevisionMessagesRead, resolveRevisionMessages, isRevisionRequestMessage,
   applyRevisionNoticesFromMessages, formatMessageTime, revisionMessageReportDate, revisionNoteForReport,
   prependStaffMessage, createPurchasingFundMessage, createDailyReportSubmittedMessage,
   createVoidPendingMessage, createDailyReportVerifiedMessage,
@@ -2812,6 +2812,7 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
       };
       if (isRevision && existingReport) {
         const { report, txs, removeIds } = resubmitDailyReport({ ...s, currentUser: user }, existingReport.id, payload);
+        const fulfilledAt = report.resubmittedAt || new Date().toISOString();
         mutate(d => {
           const i = (d.dailyReports || []).findIndex(r => r.id === existingReport.id);
           const saved = { ...report, opsNote: opsNote.trim(), dailyTargetAtSubmit: dailyTarget || null };
@@ -2819,7 +2820,7 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
           d.transactions = (d.transactions || []).filter(t => !removeIds.includes(t.id));
           txs.forEach(t => d.transactions.push(t));
           if (user?.id) {
-            d.staffMessages = markRevisionMessagesRead(d.staffMessages, existingReport.id, user.id, existingReport.date);
+            d.staffMessages = resolveRevisionMessages(d.staffMessages, existingReport.id, user.id, existingReport.date, fulfilledAt);
           }
           try {
             const nmsg = createDailyReportSubmittedMessage({ report: saved, author: user, resubmit: true });
@@ -2827,6 +2828,7 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
           } catch { /* ignore */ }
         });
         setLastReport({ ...report, opsNote: opsNote.trim(), dailyTargetAtSubmit: dailyTarget || null });
+        showActionToast("Revisi laporan terkirim — menunggu verifikasi admin", "success");
       } else {
         const { report, txs } = submitDailyReport({ ...s, currentUser: user }, payload);
         mutate(d => {
@@ -5169,10 +5171,41 @@ export default function NF3App(props) {
     openLaporanRef.current = openLaporanHarian;
   }, [openLaporanHarian]);
 
-  const notifActionRef = useRef(null);
   useEffect(() => {
     notifActionRef.current = handleNotifAction;
   }, [handleNotifAction]);
+
+  useEffect(() => {
+    if (!s || !user?.id) return;
+    const soundOn = s.automation?.revisionAlertSound !== false;
+    visibleStaffMessages(s.staffMessages, user)
+      .filter(m => !(m.readBy || []).includes(user.id) && isActionableStaffMessage(m, user))
+      .forEach(m => {
+        if (revisionNotifiedRef.current.has(m.id)) return;
+        revisionNotifiedRef.current.add(m.id);
+        const kind = getMessageKind(m);
+        if (kind === "revision_request" && soundOn) playRevisionAlertSound();
+        else if (kind === "purchasing_fund" || kind === "sosmed_reminder" || kind === "sdm_reminder") playNotificationPing();
+        else if (soundOn) playNotificationPing();
+        if (typeof Notification === "undefined") return;
+        try {
+          if (Notification.permission === "default") Notification.requestPermission();
+          else if (Notification.permission === "granted") {
+            const n = new Notification(m.title || "NF3", {
+              body: String(m.body || "").replace(/\n+/g, " ").slice(0, 140),
+              tag: "nf3-msg-" + m.id,
+              silent: true,
+            });
+            n.onclick = () => {
+              window.focus?.();
+              const action = getStaffMessageAction(m, user);
+              if (action) notifActionRef.current?.(action);
+              n.close();
+            };
+          }
+        } catch { /* ignore */ }
+      });
+  }, [s?.staffMessages, s?.automation?.revisionAlertSound, user?.id, user?.role]);
 
   useEffect(() => {
     if (!s || !bizId || skipSaveRef.current || !allowSaveRef.current) return;
