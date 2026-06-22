@@ -3041,13 +3041,28 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
 }
 
 // ─── Settle Laporan (Admin NF3) ────────────────────────────
-function DeleteReportButton({ report, busy, onDelete }) {
+function DeleteReportButton({ report, busy, onDelete, urgent = false }) {
   if (!onDelete) return null;
   return (
     <button type="button" disabled={busy === report.id} onClick={() => onDelete(report)}
-      style={{ width: "100%", padding: 10, borderRadius: 12, border: "1px solid var(--out-soft)", background: "var(--out-soft)", color: "var(--out-text)", fontWeight: 700, fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, opacity: busy === report.id ? .6 : 1 }}>
-      <Trash2 size={15} />
-      Hapus laporan omset (belum settle)
+      style={{
+        width: "100%",
+        padding: urgent ? 13 : 10,
+        borderRadius: 12,
+        border: urgent ? "2px solid var(--out-text)" : "1px solid var(--out-soft)",
+        background: urgent ? "var(--out-text)" : "var(--out-soft)",
+        color: urgent ? "#fff" : "var(--out-text)",
+        fontWeight: 800,
+        fontSize: urgent ? 14 : 13,
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 6,
+        opacity: busy === report.id ? .6 : 1,
+      }}>
+      <Trash2 size={urgent ? 17 : 15} />
+      {urgent ? "Hapus laporan & bersihkan duplikat omset" : "Hapus laporan omset (belum settle)"}
     </button>
   );
 }
@@ -3102,7 +3117,19 @@ function SettleReportCard({ r, s, cur, user, onVerify, onRevision, onSettle, onD
           <div style={{ fontWeight: 700, color: "var(--ink)", marginBottom: 4 }}>Periksa dompet laci {r.outlet}</div>
           <div>Saldo sistem: <b>{fmtMoney(laciBal, cur)}</b></div>
           <div>Harusnya (floor + tunai): <b>{fmtMoney(expectedLaci, cur)}</b></div>
-          {!laciOk && <div style={{ color: "#92400E", fontWeight: 700, marginTop: 4 }}>⚠ Selisih — verifikasi fisik atau minta revisi kasir</div>}
+          {!laciOk && (
+            <div style={{ color: "#92400E", fontWeight: 700, marginTop: 4, lineHeight: 1.45 }}>
+              ⚠ Selisih besar — kemungkinan duplikat omset tunai dari revisi.
+              {onDelete
+                ? " Gunakan tombol merah Hapus laporan di bawah (bukan hapus transaksi satu-satu di Laporan)."
+                : " Minta kasir revisi atau hubungi admin."}
+            </div>
+          )}
+        </div>
+      )}
+      {!laciOk && onDelete && r.status !== "settled" && (
+        <div style={{ marginBottom: 10 }}>
+          <DeleteReportButton report={r} busy={busy} onDelete={onDelete} urgent />
         </div>
       )}
       {cash > 0 && (
