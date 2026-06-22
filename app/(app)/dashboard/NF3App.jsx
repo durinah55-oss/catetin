@@ -9,7 +9,7 @@ import PurchasingAliasesReview from "../../../components/PurchasingAliasesReview
 import { loadAppState, saveAppState, mergeAppStateData, mergeCategoriesFromDb, cleanCategoryList, ensurePurchasingCategories, dedupeTransactionsById, aiParse, fetchBusinessAnalysis } from "../../../lib/appState";
 import { checkPurchasingFloor } from "../../../lib/purchasingExpense";
 import { normalizeTransaction, normalizeTransactions, resolveWalletId, resolveTransferIds } from "../../../lib/transactionNormalize";
-import { canDo, visibleWallets, visibleCategories, visibleTransactions, ROLE_LABEL, PURCHASING_WALLET_IDS, showPurchasingAsistenTab, showPurchasingAsistenBeranda, canUsePurchasingAsisten, canManageTransactions } from "../../../lib/rbac";
+import { canDo, visibleWallets, visibleCategories, visibleTransactions, ROLE_LABEL, PURCHASING_WALLET_IDS, showPurchasingAsistenTab, showPurchasingAsistenBeranda, canUsePurchasingAsisten, canManageTransactions, isKasKecilWallet } from "../../../lib/rbac";
 import { resolveBusinessDisplayName } from "../../../lib/canonicalBusiness";
 import {
   businessFeatures,
@@ -45,8 +45,15 @@ import {
 import {
   createStaffMessage, createRevisionRequestMessage, visibleStaffMessages, unreadStaffCount,
   markStaffMessageRead, markRevisionMessagesRead, isRevisionRequestMessage,
-  applyRevisionNoticesFromMessages, formatMessageTime, revisionMessageReportDate,
+  applyRevisionNoticesFromMessages, formatMessageTime, revisionMessageReportDate, revisionNoteForReport,
+  prependStaffMessage, createPurchasingFundMessage, createDailyReportSubmittedMessage,
+  createVoidPendingMessage, createDailyReportVerifiedMessage,
 } from "../../../lib/staffMessages";
+import {
+  NOTIFICATION_CATALOG, hydrateNotificationPrefs, getStaffMessageAction,
+  getMessageKind, isActionableStaffMessage, notificationKindLabel,
+} from "../../../lib/notificationCatalog";
+import { mergeDailyRemindersIntoDoc } from "../../../lib/notificationReminders";
 import {
   submitSosmedReport, todaySosmedReport, canInputSosmed, resolveSosmedOutlet,
   isSosmedEnabled, hydrateSosmedConfig, sosmedDisplayName, parseLines, linesToText,
@@ -81,6 +88,7 @@ import { getTransactionEditPolicy, validateTransactionUpdate, applyTransactionDe
 import { isPurchasingTx } from "../../../lib/purchasingExpense";
 import { purchasingTxTitle, purchasingTxSubtitle } from "../../../lib/purchasingItems";
 import { showActionToast } from "../../../lib/actionToast";
+import { playRevisionAlertSound, playNotificationPing, unlockNotificationAudio } from "../../../lib/notificationSound";
 import ActionToast from "../../../components/ActionToast";
 
 /** Interval muat ulang awan — jangan terlalu sering (ganggu input staf). */
@@ -258,7 +266,8 @@ const defaultState = () => ({
     { id: "u6", name: "Purchasing", role: "purchasing", outlet: null },
   ],
   profile: { name: "Nf3", type: "Usaha", currency: "IDR", theme: "light", email: "sampriatna@gmail.com", pin: "aktif", biometric: true },
-  automation: { autoImport: true, replyNotif: true },
+  automation: { autoImport: true, replyNotif: true, revisionAlertSound: true },
+  notificationPrefs: hydrateNotificationPrefs(null),
   wallets: NF_FNB_WALLETS.map((w) => ({ ...w })),
   categories: [
     { id: "ci1", name: "Penjualan Makanan", type: "in", active: true, role: null },
@@ -407,6 +416,7 @@ async function loadState(bizId, { businessType } = {}) {
       sdmReports: savedClean.sdmReports || saved.sdmReports || base.sdmReports,
       voidLogs: savedClean.voidLogs || saved.voidLogs || base.voidLogs,
       staffMessages: savedClean.staffMessages || saved.staffMessages || base.staffMessages,
+      notificationPrefs: hydrateNotificationPrefs(savedClean.notificationPrefs || saved.notificationPrefs || base.notificationPrefs),
       sosmedReports: savedClean.sosmedReports || saved.sosmedReports || base.sosmedReports,
       sosmedConfig: hydrateSosmedConfig(savedClean.sosmedConfig || saved.sosmedConfig),
       outletConfig: hydrateOutletConfig({ ...base.outletConfig, ...(savedClean.outletConfig || saved.outletConfig || {}) }),
@@ -573,7 +583,7 @@ const Lbl = ({ children }) => <div style={{ fontSize: 11, fontWeight: 700, lette
 
 function Sheet({ title, onClose, children }) {
   return (
-    <div style={{ position: "absolute", inset: 0, zIndex: 20, background: "var(--bg)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <div style={{ position: "absolute", inset: 0, zIndex: 1000, background: "var(--bg)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "14px 16px", background: "var(--surface)", borderBottom: "1px solid var(--line)", flexShrink: 0 }}>
         <button onClick={onClose} style={{ width: 36, height: 36, borderRadius: 99, background: "var(--surface2)", border: "none", cursor: "pointer", display: "grid", placeItems: "center", color: "var(--ink)" }}><ArrowLeft size={18} /></button>
         <span style={{ fontSize: 20, fontWeight: 800, color: "var(--ink)" }}>{title}</span>
@@ -2698,17 +2708,19 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
   const grouped = groupChannels(channels);
   const todaySdm = todaySdmReport(s.sdmReports, user.outlet, today());
   const floor = LACI_FLOOR;
+  const pendingRevision = findPendingRevisionReport(s.dailyReports, user.outlet, s.staffMessages);
+  const userPickedDateRef = useRef(false);
 
   const [date, setDate] = useState(() => {
     if (initialDate) return initialDate;
-    const rev = findPendingRevisionReport(s.dailyReports, user.outlet, s.staffMessages);
-    return rev?.date || today();
+    return pendingRevision?.date || today();
   });
   const dateSdm = todaySdmReport(s.sdmReports, user.outlet, date);
   const existingReport = (s.dailyReports || []).find(
     r => r.outlet === user.outlet && r.date === date && r.status !== "settled"
   );
   const isRevision = reportAwaitingKasirRevision(existingReport, s.staffMessages, user.outlet);
+  const revisionNote = revisionNoteForReport(existingReport, s.staffMessages, user.outlet);
   const isLocked = existingReport && !isRevision;
 
   const initAmounts = (report) => {
@@ -2729,6 +2741,14 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
   const [lastReport, setLastReport] = useState(isLocked ? existingReport : null);
   const draftDirtyRef = useRef(false);
   const syncDateRef = useRef(date);
+
+  useEffect(() => {
+    if (initialDate) return;
+    const rev = findPendingRevisionReport(s.dailyReports, user.outlet, s.staffMessages);
+    if (!rev?.date || userPickedDateRef.current) return;
+    if (rev.date !== date) setDate(rev.date);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.dailyReports, s.staffMessages, user.outlet, initialDate]);
 
   useEffect(() => {
     draftDirtyRef.current =
@@ -2757,7 +2777,7 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
     setErr("");
     if (forceSync) draftDirtyRef.current = false;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [date, s.dailyReports, user.outlet]);
+  }, [date, s.dailyReports, s.staffMessages, user.outlet]);
 
   const dailyTarget = dateSdm?.targetOmset || calcDailyOmsetTarget(dateSdm?.headcount || 0, s.outletConfig, user.outlet);
   const perPerson = dateSdm?.omsetPerPerson || cfg.omsetPerPerson;
@@ -2794,26 +2814,30 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
         const { report, txs, removeIds } = resubmitDailyReport({ ...s, currentUser: user }, existingReport.id, payload);
         mutate(d => {
           const i = (d.dailyReports || []).findIndex(r => r.id === existingReport.id);
-          if (i >= 0) {
-            d.dailyReports[i] = { ...report, opsNote: opsNote.trim(), dailyTargetAtSubmit: dailyTarget || null };
-          }
+          const saved = { ...report, opsNote: opsNote.trim(), dailyTargetAtSubmit: dailyTarget || null };
+          if (i >= 0) d.dailyReports[i] = saved;
           d.transactions = (d.transactions || []).filter(t => !removeIds.includes(t.id));
           txs.forEach(t => d.transactions.push(t));
           if (user?.id) {
-            d.staffMessages = markRevisionMessagesRead(d.staffMessages, existingReport.id, user.id);
+            d.staffMessages = markRevisionMessagesRead(d.staffMessages, existingReport.id, user.id, existingReport.date);
           }
+          try {
+            const nmsg = createDailyReportSubmittedMessage({ report: saved, author: user, resubmit: true });
+            d.staffMessages = prependStaffMessage(d.staffMessages, nmsg, d.notificationPrefs);
+          } catch { /* ignore */ }
         });
         setLastReport({ ...report, opsNote: opsNote.trim(), dailyTargetAtSubmit: dailyTarget || null });
       } else {
         const { report, txs } = submitDailyReport({ ...s, currentUser: user }, payload);
         mutate(d => {
           if (!d.dailyReports) d.dailyReports = [];
-          d.dailyReports.push({
-            ...report,
-            opsNote: opsNote.trim(),
-            dailyTargetAtSubmit: dailyTarget || null,
-          });
+          const saved = { ...report, opsNote: opsNote.trim(), dailyTargetAtSubmit: dailyTarget || null };
+          d.dailyReports.push(saved);
           txs.forEach(t => d.transactions.push(t));
+          try {
+            const nmsg = createDailyReportSubmittedMessage({ report: saved, author: user, resubmit: false });
+            d.staffMessages = prependStaffMessage(d.staffMessages, nmsg, d.notificationPrefs);
+          } catch { /* ignore */ }
         });
         setLastReport({
           ...report,
@@ -2839,7 +2863,7 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
 
   return (
     <Sheet title={`Laporan Omset · ${OUTLET_LABEL[user.outlet] || user.outlet}`} onClose={onClose}>
-      <div style={{ padding: "16px 16px 40px" }}>
+      <div style={{ padding: "16px 16px max(48px, env(safe-area-inset-bottom))" }}>
         <div style={{ fontSize: 13, color: "var(--ink2)", marginBottom: 16, padding: "12px 14px", background: "var(--brand-soft)", borderRadius: 12 }}>
           Isi sesuai kebiasaan laporan manual outlet Anda. <b>Tunai/setoran</b> masuk laci {user.outlet}.
           Channel lain dicatat untuk Admin NF3 settle ke rekening/dompet digital.
@@ -2850,11 +2874,17 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
             <div style={{ marginTop: 6 }}>Target: <b>{fmtMoney(cfg.omsetPerPerson, cur)}/org × SDM</b> — SDM pagi opsional untuk backfill tanggal lalu</div>
           )}
         </div>
-        {isRevision && existingReport?.revisionNote && (
+        {isRevision && revisionNote && (
           <div style={{ marginBottom: 14, padding: "12px 14px", borderRadius: 12, background: "var(--out-soft)", border: "1px solid #FECACA" }}>
-            <div style={{ fontSize: 12, fontWeight: 800, color: "var(--out-text)", marginBottom: 4 }}>Revisi wajib dari {existingReport.revisionRequestedByRole === "owner" ? "Owner" : "Admin Keuangan"}</div>
-            <div style={{ fontSize: 13, color: "var(--ink)", lineHeight: 1.45 }}>{existingReport.revisionNote}</div>
+            <div style={{ fontSize: 12, fontWeight: 800, color: "var(--out-text)", marginBottom: 4 }}>Revisi wajib dari {existingReport?.revisionRequestedByRole === "owner" ? "Owner" : "Admin Keuangan"}</div>
+            <div style={{ fontSize: 13, color: "var(--ink)", lineHeight: 1.45 }}>{revisionNote}</div>
           </div>
+        )}
+        {pendingRevision && pendingRevision.date !== date && (
+          <button type="button" onClick={() => { userPickedDateRef.current = false; setDate(pendingRevision.date); }}
+            style={{ width: "100%", marginBottom: 14, padding: "12px 14px", borderRadius: 12, border: "2px solid var(--out-text)", background: "var(--out-soft)", color: "var(--out-text)", fontWeight: 700, fontSize: 13, cursor: "pointer", textAlign: "left" }}>
+            ⚠ Revisi wajib untuk {shortDate(pendingRevision.date)} — tap untuk buka form revisi
+          </button>
         )}
         {!dateSdm && date === today() && (
           <div style={{ fontSize: 13, color: "var(--ink2)", marginBottom: 12, padding: "10px 12px", background: "var(--surface2)", borderRadius: 10 }}>
@@ -2869,11 +2899,13 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
           </Card>
         )}
         <Fld label="Tanggal">
-          <input type="date" value={date} onChange={e => setDate(e.target.value)} max={today()} disabled={isRevision}
-            style={{ width: "100%", padding: "12px 14px", borderRadius: 12, border: "1px solid var(--line)", background: isRevision ? "var(--surface2)" : "var(--surface)", fontSize: 14, color: "var(--ink)", outline: "none" }} />
-          {isRevision && (
-            <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: 6 }}>Tanggal terkunci saat revisi — ubah nominal sesuai catatan admin.</div>
-          )}
+          <input type="date" value={date} onChange={e => { userPickedDateRef.current = true; setDate(e.target.value); }} max={today()}
+            style={{ width: "100%", padding: "12px 14px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface)", fontSize: 14, color: "var(--ink)", outline: "none" }} />
+          <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: 6 }}>
+            {isRevision
+              ? "Ubah tanggal untuk laporan lain — selama belum settle, revisi bisa dikirim ulang."
+              : "Backfill tanggal lalu boleh · laporan sudah kirim terkunci kecuali admin minta revisi."}
+          </div>
         </Fld>
 
         {ui.physicalCashControl && (
@@ -2943,7 +2975,7 @@ function KasirHarianScreen({ s, mutate, onClose, initialDate = null }) {
 
         {err && <div style={{ marginTop: 12, padding: 12, borderRadius: 10, background: "var(--out-soft)", color: "var(--out-text)", fontSize: 13 }}>{err}</div>}
         {!showSubmittedLock ? (
-          <button disabled={!ready || submitting} onClick={submit} style={{ width: "100%", marginTop: 16, padding: 14, borderRadius: 14, border: "none", background: ready ? (isRevision ? "var(--out-text)" : "var(--brand)") : "var(--ink3)", opacity: ready ? 1 : .5, color: "#fff", fontWeight: 700, fontSize: 15, cursor: "pointer" }}>
+          <button type="button" disabled={!ready || submitting} onClick={submit} style={{ width: "100%", marginTop: 16, marginBottom: 8, padding: 14, borderRadius: 14, border: "none", background: ready ? (isRevision ? "var(--out-text)" : "var(--brand)") : "var(--ink3)", opacity: ready ? 1 : .5, color: "#fff", fontWeight: 700, fontSize: 15, cursor: ready && !submitting ? "pointer" : "default", position: "relative", zIndex: 2 }}>
             {submitting ? "Menyimpan…" : isRevision ? "Kirim revisi →" : "Kirim laporan →"}
           </button>
         ) : lastReport ? (
@@ -3109,7 +3141,14 @@ function SettleLaporanScreen({ s, mutate, onClose }) {
     setErr(""); setBusy(reportId);
     try {
       const updated = verifyDailyReportAdmin(s, reportId, user);
-      patchReport(reportId, updated);
+      mutate(d => {
+        const i = (d.dailyReports || []).findIndex(r => r.id === reportId);
+        if (i >= 0) d.dailyReports[i] = updated;
+        try {
+          const nmsg = createDailyReportVerifiedMessage({ report: updated, author: user });
+          d.staffMessages = prependStaffMessage(d.staffMessages, nmsg, d.notificationPrefs);
+        } catch { /* ignore */ }
+      });
       setRevisingId(null);
       setRevisionNote("");
     } catch (e) {
@@ -3126,8 +3165,7 @@ function SettleLaporanScreen({ s, mutate, onClose }) {
       mutate(d => {
         const i = (d.dailyReports || []).findIndex(r => r.id === reportId);
         if (i >= 0) d.dailyReports[i] = updated;
-        if (!d.staffMessages) d.staffMessages = [];
-        d.staffMessages.unshift(msg);
+        d.staffMessages = prependStaffMessage(d.staffMessages, msg, d.notificationPrefs);
       });
       setRevisingId(null);
       setRevisionNote("");
@@ -3714,6 +3752,60 @@ function PengaturanScreen({ s, mutate, onClose, setOverlay, setTab, bizId, authU
             <Check size={16} color="var(--brand)" style={{ marginLeft: "auto" }} />
           </div>
         </div>
+
+        {isKasir && features?.kasirDaily && (
+          <>
+            <Lbl>Notifikasi Kasir</Lbl>
+            <Card style={{ overflow: "hidden", marginBottom: 24 }}>
+              <STog icon={Bell} label="Bunyi revisi laporan omset" sub="Chime + getar HP saat admin minta perbaikan laporan harian" on={s.automation?.revisionAlertSound !== false} onToggle={() => setA("revisionAlertSound", s.automation?.revisionAlertSound === false)} />
+            </Card>
+          </>
+        )}
+
+        {canDo(role, "kirimPengumuman") && (
+          <>
+            <Lbl>Notifikasi Otomatis</Lbl>
+            <div style={{ fontSize: 12, color: "var(--ink3)", marginTop: -6, marginBottom: 10, lineHeight: 1.45 }}>
+              Pilih jenis notifikasi yang NF3 kirim ke staf. Semua notifikasi aktif bisa di-tap untuk buka form terkait.
+            </div>
+            <Card style={{ overflow: "hidden", marginBottom: 16 }}>
+              {NOTIFICATION_CATALOG.map((c) => (
+                <STog
+                  key={c.id}
+                  icon={Bell}
+                  label={c.label}
+                  sub={`${c.description} · untuk ${c.recipients}`}
+                  on={s.notificationPrefs?.[c.id] !== false}
+                  onToggle={() => mutate(d => {
+                    if (!d.notificationPrefs) d.notificationPrefs = hydrateNotificationPrefs(null);
+                    d.notificationPrefs[c.id] = d.notificationPrefs[c.id] === false;
+                  })}
+                />
+              ))}
+            </Card>
+            <Card style={{ padding: "14px 16px", marginBottom: 24 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ink)", marginBottom: 10 }}>Jam pengingat harian</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <Fld label="SDM pagi (mulai jam)">
+                  <input type="number" min={6} max={14} value={s.notificationPrefs?.sdmReminderHour ?? 10}
+                    onChange={e => mutate(d => {
+                      if (!d.notificationPrefs) d.notificationPrefs = hydrateNotificationPrefs(null);
+                      d.notificationPrefs.sdmReminderHour = Math.min(14, Math.max(6, +e.target.value || 10));
+                    })}
+                    style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid var(--line)", fontSize: 14 }} />
+                </Fld>
+                <Fld label="Report Sosmed (mulai jam)">
+                  <input type="number" min={12} max={23} value={s.notificationPrefs?.sosmedReminderHour ?? 20}
+                    onChange={e => mutate(d => {
+                      if (!d.notificationPrefs) d.notificationPrefs = hydrateNotificationPrefs(null);
+                      d.notificationPrefs.sosmedReminderHour = Math.min(23, Math.max(12, +e.target.value || 20));
+                    })}
+                    style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid var(--line)", fontSize: 14 }} />
+                </Fld>
+              </div>
+            </Card>
+          </>
+        )}
 
         {!isStaff && (
           <>
@@ -4525,7 +4617,7 @@ function BroadcastScreen({ s, mutate, onClose, user }) {
 }
 
 // ─── Notif ─────────────────────────────────────────────────
-function NotifScreen({ s, user, mutate, onClose, onCompose, onOpenLaporan }) {
+function NotifScreen({ s, user, mutate, onClose, onCompose, onAction }) {
   const items = visibleStaffMessages(s.staffMessages, user);
   const canSend = canDo(user.role, "kirimPengumuman");
 
@@ -4535,10 +4627,16 @@ function NotifScreen({ s, user, mutate, onClose, onCompose, onOpenLaporan }) {
     }
   };
 
-  const openRevision = (msg) => {
-    if (!onOpenLaporan) return;
+  const runAction = (msg) => {
     openMsg(msg);
-    onOpenLaporan(revisionMessageReportDate(msg));
+    const action = getStaffMessageAction(msg, user);
+    if (action && onAction) {
+      onAction(action);
+      return;
+    }
+    if (getMessageKind(msg) !== "broadcast") {
+      showActionToast("Buka menu terkait dari Beranda jika tombol tidak tersedia.", "info");
+    }
   };
 
   return (
@@ -4551,25 +4649,32 @@ function NotifScreen({ s, user, mutate, onClose, onCompose, onOpenLaporan }) {
         )}
         {items.length === 0 ? (
           <div style={{ textAlign: "center", padding: "40px 16px", color: "var(--ink3)", fontSize: 13 }}>
-            Belum ada pengumuman.{canSend ? " Gunakan tombol di atas untuk kirim instruksi ke kasir." : " Admin NF3 akan mengirim info operasional di sini — termasuk permintaan revisi laporan omset."}
+            Belum ada pengumuman.{canSend ? " Gunakan tombol di atas untuk kirim instruksi ke kasir." : " Notifikasi operasional (revisi, dana masuk, pengingat sosmed, dll.) akan muncul di sini."}
           </div>
         ) : items.map(n => {
           const unread = user?.id && !(n.readBy || []).includes(user.id);
-          const isRevision = isRevisionRequestMessage(n);
+          const kind = getMessageKind(n);
+          const action = getStaffMessageAction(n, user);
+          const canTap = !!action && !!onAction;
+          const urgent = action?.urgent;
+          const kindLabel = kind !== "broadcast" ? notificationKindLabel(kind) : null;
           return (
-            <Card key={n.id} role={isRevision && onOpenLaporan ? "button" : undefined} tabIndex={isRevision && onOpenLaporan ? 0 : undefined}
-              style={{ padding: 16, border: isRevision ? "2px solid var(--out-text)" : unread ? "1px solid var(--brand)" : undefined, background: isRevision ? "var(--out-soft)" : undefined, cursor: isRevision && onOpenLaporan ? "pointer" : undefined }}
-              onClick={() => (isRevision && onOpenLaporan ? openRevision(n) : openMsg(n))}
-              onKeyDown={(e) => { if (isRevision && onOpenLaporan && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openRevision(n); } }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
-                <div style={{ fontWeight: 700, color: isRevision ? "var(--out-text)" : "var(--brand)", fontSize: 14 }}>{n.title}</div>
-                {(unread || isRevision) && <span style={{ fontSize: 10, fontWeight: 800, padding: "2px 8px", borderRadius: 99, background: isRevision ? "#FEE2E2" : "var(--brand-soft)", color: isRevision ? "var(--out-text)" : "var(--brand)", flexShrink: 0 }}>{isRevision ? "Tap untuk revisi" : "Baru"}</span>}
+            <Card key={n.id} role={canTap ? "button" : undefined} tabIndex={canTap ? 0 : undefined}
+              style={{ padding: 16, border: urgent ? "2px solid var(--out-text)" : unread ? "1px solid var(--brand)" : undefined, background: urgent ? "var(--out-soft)" : undefined, cursor: canTap ? "pointer" : undefined }}
+              onClick={() => (canTap ? runAction(n) : openMsg(n))}
+              onKeyDown={(e) => { if (canTap && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); runAction(n); } }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+                <div style={{ fontWeight: 700, color: urgent ? "var(--out-text)" : "var(--brand)", fontSize: 14 }}>{n.title}</div>
+                <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                  {kindLabel && <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 99, background: "var(--surface2)", color: "var(--ink3)" }}>{kindLabel}</span>}
+                  {(unread || urgent) && <span style={{ fontSize: 10, fontWeight: 800, padding: "2px 8px", borderRadius: 99, background: urgent ? "#FEE2E2" : "var(--brand-soft)", color: urgent ? "var(--out-text)" : "var(--brand)" }}>{canTap ? "Tap aksi" : unread ? "Baru" : ""}</span>}
+                </div>
               </div>
               <div style={{ fontSize: 13, color: "var(--ink)", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{n.body}</div>
-              {isRevision && onOpenLaporan && (
-                <button type="button" onClick={(e) => { e.stopPropagation(); openRevision(n); }}
-                  style={{ width: "100%", marginTop: 12, padding: 12, borderRadius: 12, border: "none", background: "var(--out-text)", color: "#fff", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>
-                  Buka form revisi tanggal {shortDate(revisionMessageReportDate(n) || "")} →
+              {canTap && action?.label && (
+                <button type="button" onClick={(e) => { e.stopPropagation(); runAction(n); }}
+                  style={{ width: "100%", marginTop: 12, padding: 12, borderRadius: 12, border: "none", background: urgent ? "var(--out-text)" : "var(--brand)", color: "#fff", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>
+                  {action.label}
                 </button>
               )}
               <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: 8 }}>
@@ -4627,6 +4732,10 @@ function VoidScreen({ s, mutate, user, reviewOnly = false }) {
       mutate(d => {
         if (!d.voidLogs) d.voidLogs = [];
         d.voidLogs.push(entry);
+        try {
+          const nmsg = createVoidPendingMessage({ entry, author: user });
+          d.staffMessages = prependStaffMessage(d.staffMessages, nmsg, d.notificationPrefs);
+        } catch { /* ignore */ }
       });
       setOk(mode === "cancel" ? "Void cancel tercatat — Admin keuangan akan review." : "Transaksi baru tercatat — Admin keuangan akan review.");
       resetForm();
@@ -4838,6 +4947,7 @@ export default function NF3App(props) {
   const [loadErr, setLoadErr] = useState(null);
   const [fnbGate, setFnbGate] = useState(null);
   const [laporanInitialDate, setLaporanInitialDate] = useState(null);
+  const [laporanOpenSeq, setLaporanOpenSeq] = useState(0);
   const skipSaveRef = useRef(false);
   const allowSaveRef = useRef(false);
   const saveQueueRef = useRef(Promise.resolve());
@@ -4845,12 +4955,24 @@ export default function NF3App(props) {
   const overlayRef = useRef(null);
   const catatRef = useRef(false);
   const revisionNotifiedRef = useRef(new Set());
+  const openLaporanRef = useRef(null);
+  const notifActionRef = useRef(null);
 
   useEffect(() => { sRef.current = s; }, [s]);
   useEffect(() => { overlayRef.current = overlay; }, [overlay]);
   useEffect(() => { catatRef.current = catat; }, [catat]);
 
   useEffect(() => { registerServiceWorker(); }, []);
+
+  useEffect(() => {
+    const unlock = () => unlockNotificationAudio();
+    document.addEventListener("pointerdown", unlock, { once: true, passive: true });
+    document.addEventListener("keydown", unlock, { once: true });
+    return () => {
+      document.removeEventListener("pointerdown", unlock);
+      document.removeEventListener("keydown", unlock);
+    };
+  }, []);
 
   const applyMemberUsers = useCallback((doc, memberRows) => {
     if (!doc || typeof doc !== "object") return doc;
@@ -4964,26 +5086,6 @@ export default function NF3App(props) {
   const canonicalBusiness = useMemo(() => findCanonicalInList(businesses), [businesses]);
 
   useEffect(() => {
-    if (!s || user?.role !== "kasir" || !user?.id) return;
-    visibleStaffMessages(s.staffMessages, user)
-      .filter(m => isRevisionRequestMessage(m) && !(m.readBy || []).includes(user.id))
-      .forEach(m => {
-        if (revisionNotifiedRef.current.has(m.id)) return;
-        revisionNotifiedRef.current.add(m.id);
-        if (typeof Notification === "undefined") return;
-        try {
-          if (Notification.permission === "default") Notification.requestPermission();
-          else if (Notification.permission === "granted") {
-            new Notification(m.title || "Revisi laporan omset wajib", {
-              body: String(m.body || "").replace(/\n+/g, " ").slice(0, 140),
-              tag: "nf3-revision-" + m.id,
-            });
-          }
-        } catch { /* ignore */ }
-      });
-  }, [s?.staffMessages, user?.id, user?.role]);
-
-  useEffect(() => {
     setOverlay(null);
     setCatat(false);
     setFnbGate(null);
@@ -5003,6 +5105,21 @@ export default function NF3App(props) {
     if (tab === "void" && (!canDo(user.role, "inputVoid") || !features.voidOutlet)) setTab("beranda");
   }, [tab, user?.role, features.fnbAnalisis, features.purchasingModule, features.voidOutlet]);
 
+  useEffect(() => {
+    if (!s || !features.isFnB || !bizId) return;
+    const tick = () => {
+      if (document.visibilityState !== "visible") return;
+      setS(prev => {
+        if (!prev) return prev;
+        const next = mergeDailyRemindersIntoDoc(prev, today(), new Date());
+        return next === prev ? prev : next;
+      });
+    };
+    tick();
+    const id = setInterval(tick, 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [s?.notificationPrefs, s?.sosmedConfig, features.isFnB, bizId]);
+
   const openOverlay = useCallback((name) => {
     if (name === "wallets" && !canDo(user.role, "kelolaDompet")) return;
     if (name === "adjustSaldo" && !canDo(user.role, "editSaldoDompet")) return;
@@ -5017,8 +5134,45 @@ export default function NF3App(props) {
 
   const openLaporanHarian = useCallback((date = null) => {
     setLaporanInitialDate(date);
+    setLaporanOpenSeq(seq => seq + 1);
     openOverlay("laporanHarian");
   }, [openOverlay]);
+
+  const handleNotifAction = useCallback((action) => {
+    if (!action?.type) return;
+    switch (action.type) {
+      case "laporanHarian":
+        openLaporanHarian(action.date || null);
+        break;
+      case "sosmedHarian":
+        openOverlay("sosmedHarian");
+        break;
+      case "sdmHarian":
+        openOverlay("sdmHarian");
+        break;
+      case "settleLaporan":
+        openOverlay("settleLaporan");
+        break;
+      case "voidReview":
+        openOverlay("voidReview");
+        break;
+      case "catatBelanja":
+        setTab("beranda");
+        setCatat(true);
+        break;
+      default:
+        break;
+    }
+  }, [openLaporanHarian, openOverlay]);
+
+  useEffect(() => {
+    openLaporanRef.current = openLaporanHarian;
+  }, [openLaporanHarian]);
+
+  const notifActionRef = useRef(null);
+  useEffect(() => {
+    notifActionRef.current = handleNotifAction;
+  }, [handleNotifAction]);
 
   useEffect(() => {
     if (!s || !bizId || skipSaveRef.current || !allowSaveRef.current) return;
@@ -5209,7 +5363,7 @@ export default function NF3App(props) {
           </Sheet>
         )}
         {overlay === "inbox"      && canDo(user.role, "inputIncome") && <InboxScreen s={view} onClose={() => setOverlay(null)} onAccept={acceptDraft} onDismiss={dismiss} onAddDraft={addInboxDraft} />}
-        {overlay === "notif"      && <NotifScreen s={view} user={user} mutate={mutate} onClose={() => setOverlay(null)} onCompose={() => setOverlay("broadcast")} onOpenLaporan={openLaporanHarian} />}
+        {overlay === "notif"      && <NotifScreen s={view} user={user} mutate={mutate} onClose={() => setOverlay(null)} onCompose={() => setOverlay("broadcast")} onAction={handleNotifAction} />}
         {overlay === "broadcast" && canDo(user.role, "kirimPengumuman") && <BroadcastScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} />}
         {overlay === "adjustSaldo" && canDo(user.role, "editSaldoDompet") && <AdjustSaldoScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} />}
         {overlay === "wallets" && canDo(user.role, "kelolaDompet") && <WalletScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} bizId={bizId} businesses={businesses} features={features} />}
@@ -5242,12 +5396,12 @@ export default function NF3App(props) {
         {overlay === "sosmedHarian" && features.sosmedReports && canInputSosmed(user, s?.sosmedConfig) && <SosmedHarianScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} />}
         {overlay === "sosmedConfig" && features.sosmedReports && canDo(user.role, "settleLaci") && <SosmedConfigScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
         {overlay === "sdmHarian" && features.kasirDaily && canDo(user.role, "inputLaporanHarian") && <SdmHarianScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
-        {overlay === "laporanHarian" && features.kasirDaily && canDo(user.role, "inputLaporanHarian") && <KasirHarianScreen key={laporanInitialDate || "today"} s={view} mutate={mutate} initialDate={laporanInitialDate} onClose={() => { setLaporanInitialDate(null); setOverlay(null); }} />}
+        {overlay === "laporanHarian" && features.kasirDaily && canDo(user.role, "inputLaporanHarian") && <KasirHarianScreen key={`${laporanOpenSeq}-${laporanInitialDate || "today"}`} s={view} mutate={mutate} initialDate={laporanInitialDate} onClose={() => { setLaporanInitialDate(null); setOverlay(null); }} />}
         {overlay === "settleLaporan" && features.settleLaci && canDo(user.role, "settleLaci") && <SettleLaporanScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
         {overlay === "outletTargets" && features.settleLaci && canDo(user.role, "settleLaci") && <OutletTargetSettingsScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
         {overlay === "reportChannels" && features.settleLaci && canDo(user.role, "settleLaci") && <ReportChannelSettingsScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
         {overlay === "pair"       && <PairScreen bizId={bizId} authUser={authUser} onClose={() => setOverlay(null)} />}
-        {bizId && user?.role && user.role !== "purchasing" && features.isFnB && (
+        {bizId && user?.role && user.role !== "purchasing" && features.isFnB && !overlay && (
           <NF3Assistant
             role={user.role === "admin" ? "keuangan" : user.role}
             outlet={user.role === "kasir" && user.outlet ? user.outlet : "semua"}
