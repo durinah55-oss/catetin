@@ -19,8 +19,14 @@ import {
   visibleWalletsForBusiness,
   visibleTransactionsForBusiness,
   visibleCategoriesForBusiness,
+  visibleNfIncomeCategories,
+  filterTransactionsForNfFinance,
+  scopedNfFinanceTransactions,
   resolveCategoriesForBusiness,
   isOverlayAllowedForBusiness,
+  isNfFishingBusiness,
+  nfBusinessContext,
+  isNfFinanceScope,
   fnbFeatureLabel,
   findCanonicalInList,
   CANONICAL_DISPLAY_NAME,
@@ -28,7 +34,14 @@ import {
   isFnBOnlyWallet,
   isNfPurchasingOpsWallet,
 } from "../../../lib/businessFeatures";
-import { remapNfTransactions } from "../../../lib/nfCategoryCatalog";
+import { remapNfTransactions, needsNfChannelUpgrade, ensureNfFishingCategories, hasLegacyNfMpIncomeCategories } from "../../../lib/nfCategoryCatalog";
+import {
+  hydrateMpStores, mpStoresForCategory, buildMpIncomeMeta, groupNfIncomeCategories,
+  createMpStoreId, nextStoreCode, NF_MP_PLATFORMS,
+} from "../../../lib/nfSalesChannels";
+import { computeNfChannelBreakdown } from "../../../lib/nfChannelReport";
+import { migrateLegacyMpIncomeTransactions } from "../../../lib/nfLegacyMpMigration";
+import NfChannelBreakdownCard from "../../../components/NfChannelBreakdownCard";
 import { resolveAuthMembership } from "../../../lib/membershipResolve";
 import { walletOptionLabel, walletBalanceDisplay, walletsForSaldoTotal, shouldHideWalletBalance, purchasingBalancePresentation, isKasKecilWalletDisplay, isLaciOutletWallet, laciBalancePresentation } from "../../../lib/walletDisplay";
 import { getAccountUi, navConfig } from "../../../lib/accountUi";
@@ -130,7 +143,11 @@ const SAVE_DEBOUNCE_MS = 1000;
 const CRITICAL_SAVE_WINDOW_MS = 3500;
 
 function extractSavePayload(doc) {
-  const { currentUser, users, _systemThemeTick, _cloudUpdatedAt, _cloudLoaded, ...data } = doc || {};
+  const {
+    currentUser, users, _systemThemeTick, _cloudUpdatedAt, _cloudLoaded,
+    _nfTxRemapped, _nfMpMigrationStats, _nfCategoriesUpgraded,
+    ...data
+  } = doc || {};
   return data;
 }
 
@@ -499,7 +516,7 @@ function mergeWallets(defaults, saved, { mode = "canonical" } = {}) {
   return patchWalletCatalog(sortWallets(merged));
 }
 
-async function loadState(bizId, { businessType } = {}) {
+async function loadState(bizId, { businessType, business } = {}) {
   const saved = await loadAppState(bizId);
   if (saved && Object.keys(saved).length) {
     const { _cloudUpdatedAt, currentUser: _cu, users: _u, ...savedClean } = saved;
@@ -518,17 +535,41 @@ async function loadState(bizId, { businessType } = {}) {
       { mode: mergeMode }
     );
     const wallets = rebuildWalletsWithShared(mergedWallets, walletSetup);
-      const txs = dedupeTransactionsById(savedClean.transactions || saved.transactions || []);
+    const txs = dedupeTransactionsById(savedClean.transactions || saved.transactions || []);
+    const savedProfile = savedClean.profile || saved.profile || {};
     const savedCats = savedClean.categories || saved.categories || [];
-    const categories = isFnb
+    const nfCtx = { wallets, categories: savedCats, walletSetup, profile: savedProfile };
+    const bizCtx = business || { type: resolvedType, name: savedProfile?.name, slug: business?.slug };
+    let isFishing = !isFnb && isNfFishingBusiness(bizCtx, nfCtx);
+    let categories = isFnb
       ? ensurePurchasingCategories(
           cleanCategoryList(mergeCategoriesFromDb(base.categories, savedCats)),
           cleanCategoryList
         )
       : cleanCategoryList(
-          resolveCategoriesForBusiness(savedCats, { id: bizId, type: resolvedType }) || []
+          resolveCategoriesForBusiness(savedCats, bizCtx, nfCtx) || []
         );
-    const nfTx = isFnb ? { transactions: txs, changed: false } : remapNfTransactions(txs);
+    if (!isFnb && isFishing && needsNfChannelUpgrade(categories)) {
+      categories = cleanCategoryList(ensureNfFishingCategories(categories));
+    }
+    const categoriesUpgraded = isFishing && needsNfChannelUpgrade(savedCats) && !needsNfChannelUpgrade(categories);
+
+    let nfTransactions = txs;
+    let nfTxChanged = false;
+    let mpMigStats = undefined;
+    let loadedMpStores = null;
+    if (isFishing) {
+      const nfTx = remapNfTransactions(txs);
+      nfTransactions = nfTx.transactions;
+      nfTxChanged = nfTx.changed;
+      loadedMpStores = hydrateMpStores(savedClean.mpStores || saved.mpStores);
+      const mpMig = migrateLegacyMpIncomeTransactions(nfTransactions, { mpStores: loadedMpStores });
+      if (mpMig.changed) {
+        nfTransactions = mpMig.transactions;
+        nfTxChanged = true;
+        mpMigStats = mpMig.stats;
+      }
+    }
     return {
       ...base,
       ...savedClean,
@@ -537,8 +578,10 @@ async function loadState(bizId, { businessType } = {}) {
       walletSetup,
       wallets,
       categories,
-      transactions: nfTx.transactions,
-      _nfTxRemapped: nfTx.changed || undefined,
+      transactions: nfTransactions,
+      _nfTxRemapped: nfTxChanged || undefined,
+      _nfMpMigrationStats: mpMigStats,
+      _nfCategoriesUpgraded: categoriesUpgraded || undefined,
       profile: { ...base.profile, ...(savedClean.profile || saved.profile) },
       automation: { ...base.automation, ...(savedClean.automation || saved.automation) },
       dailyReports: savedClean.dailyReports || saved.dailyReports || base.dailyReports,
@@ -551,6 +594,7 @@ async function loadState(bizId, { businessType } = {}) {
       outletConfig: hydrateOutletConfig({ ...base.outletConfig, ...(savedClean.outletConfig || saved.outletConfig || {}) }),
       reportChannels: migrateReportChannelSettles(hydrateReportChannels(savedClean.reportChannels || saved.reportChannels)),
       reportUi: hydrateReportUi(savedClean.reportUi || saved.reportUi),
+      ...(isFishing ? { mpStores: loadedMpStores ?? hydrateMpStores(savedClean.mpStores || saved.mpStores) } : {}),
       hiddenInsights: Array.isArray(savedClean.hiddenInsights)
         ? savedClean.hiddenInsights
         : (Array.isArray(saved.hiddenInsights) ? saved.hiddenInsights : base.hiddenInsights),
@@ -1202,8 +1246,16 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
   }, [isNfPurchasing, orderedWallets]);
   const scopedTx = useMemo(() => {
     const local = visibleTransactionsForBusiness(s.transactions, s.wallets, user, business);
-    return mergeWithLocalTransactions(local, sharedTxByWallet);
-  }, [s.transactions, s.wallets, user, business, sharedTxByWallet]);
+    const merged = mergeWithLocalTransactions(local, sharedTxByWallet);
+    if (features.nfChannelFinance) {
+      return scopedNfFinanceTransactions(local, sharedTxByWallet, s.categories, {
+        businessId: bizId,
+        role: user.role,
+        userId: user.id,
+      });
+    }
+    return merged;
+  }, [s.transactions, s.wallets, s.categories, user, business, sharedTxByWallet, features.nfChannelFinance, bizId]);
   const summaryTx = useMemo(() => {
     if (user.role !== "purchasing") return scopedTx;
     const focusWalletId = areaWallet?.id || primaryPurchasingWallet?.id || null;
@@ -1235,6 +1287,11 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
     () => summaryTx.filter(t => t.type === "out" && t.date.startsWith(prefix)).reduce((a, b) => a + b.amount, 0),
     [summaryTx, prefix]
   );
+  const showNfOmzet = features.nfChannelFinance && canDo(user.role, "lihatLaporanPenuh");
+  const nfMonthChannels = useMemo(() => {
+    if (!showNfOmzet) return null;
+    return computeNfChannelBreakdown(scopedTx, s.categories, { start: `${prefix}-01`, end: today() });
+  }, [showNfOmzet, scopedTx, s.categories, prefix]);
   const nfMonthOut = useMemo(
     () => (scopedTx || []).filter((t) => t.type === "out" && t.date.startsWith(prefix)).reduce((a, b) => a + b.amount, 0),
     [scopedTx, prefix]
@@ -1386,6 +1443,17 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
           )}
         </div>
       </div>
+
+      {showNfOmzet && nfMonthChannels && (
+        <NfChannelBreakdownCard
+          breakdown={nfMonthChannels}
+          mpStores={s.mpStores}
+          cur={cur}
+          fmtMoney={fmtMoney}
+          variant="compact"
+          onDetailClick={() => setTab("laporan")}
+        />
+      )}
 
       {/* dompet */}
       {(() => {
@@ -2029,7 +2097,7 @@ function IconBtn({ children, onClick, badge, title, variant, disabled }) {
 }
 
 // ─── Laporan ───────────────────────────────────────────────
-function Laporan({ s, mutate, onOpenPair, onOpenPurchasingReport, business, features, webMode, sharedTxByWallet }) {
+function Laporan({ s, mutate, onOpenPair, onOpenPurchasingReport, business, features, webMode, sharedTxByWallet, bizId }) {
   const cur = s.profile.currency;
   const user = s.currentUser || { role: "kasir" };
   const role = user.role || "kasir";
@@ -2040,8 +2108,15 @@ function Laporan({ s, mutate, onOpenPair, onOpenPurchasingReport, business, feat
   const myWallets = visibleWalletsForBusiness(s.wallets, user, business);
   const scopedBase = useMemo(() => {
     const local = visibleTransactionsForBusiness(s.transactions, s.wallets, user, business);
+    if (features.nfChannelFinance) {
+      return scopedNfFinanceTransactions(local, sharedTxByWallet, s.categories, {
+        businessId: bizId,
+        role: user.role,
+        userId: user.id,
+      });
+    }
     return mergeWithLocalTransactions(local, sharedTxByWallet);
-  }, [s.transactions, s.wallets, user, business, sharedTxByWallet]);
+  }, [s.transactions, s.wallets, s.categories, user, business, sharedTxByWallet, features.nfChannelFinance, bizId]);
   const [range, setRange] = useState("Harian");
   const [anchorDate, setAnchorDate] = useState(today());
   const [customStart, setCustomStart] = useState(isoOffset(-6));
@@ -2069,10 +2144,15 @@ function Laporan({ s, mutate, onOpenPair, onOpenPurchasingReport, business, feat
 
   const { inSum, outSum, net, count } = useMemo(() => sumInOut(tx), [tx]);
 
-  const showNfLabaRugi = !features.isFnB && canDo(user.role, "lihatLaporanPenuh");
+  const showNfLabaRugi = features.nfChannelFinance && canDo(user.role, "lihatLaporanPenuh");
   const nfProfit = useMemo(() => {
     if (!showNfLabaRugi) return null;
     return computeNfProfit(scopedBase, s.categories, { start: bounds.start, end: bounds.end });
+  }, [showNfLabaRugi, scopedBase, s.categories, bounds.start, bounds.end]);
+
+  const nfChannels = useMemo(() => {
+    if (!showNfLabaRugi) return null;
+    return computeNfChannelBreakdown(scopedBase, s.categories, { start: bounds.start, end: bounds.end });
   }, [showNfLabaRugi, scopedBase, s.categories, bounds.start, bounds.end]);
 
   const chart = useMemo(
@@ -2360,9 +2440,15 @@ function Laporan({ s, mutate, onOpenPair, onOpenPurchasingReport, business, feat
                 {nfProfit.labaBersih >= 0 ? "▲ " : "▼ "}{fmtMoney(Math.abs(nfProfit.labaBersih), cur)}
               </span>
             </div>
-            {(nfProfit.prive > 0 || nfProfit.transfer > 0 || nfProfit.capex > 0) && (
+            {(nfProfit.prive > 0 || nfProfit.transfer > 0 || nfProfit.capex > 0 || nfProfit.capital > 0) && (
               <div style={{ padding: "10px 16px 12px", borderTop: "1px solid var(--line)", background: "#FFFBEB" }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: "#92400E", marginBottom: 6 }}>Tidak mengurangi laba NF</div>
+                {nfProfit.capital > 0 && (
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#78350F", marginBottom: 4 }}>
+                    <span>Modal / pinjaman masuk</span>
+                    <span className="money">{fmtMoney(nfProfit.capital, cur)}</span>
+                  </div>
+                )}
                 {nfProfit.prive > 0 && (
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#78350F", marginBottom: 4 }}>
                     <span>Prive / transfer owner</span>
@@ -2398,6 +2484,16 @@ function Laporan({ s, mutate, onOpenPair, onOpenPurchasingReport, business, feat
             Omzet bersih = penjualan − diskon/retur/refund. Prive owner hanya memengaruhi arus kas, bukan laba.
           </div>
         </div>
+      )}
+
+      {showNfLabaRugi && nfChannels && (
+        <NfChannelBreakdownCard
+          breakdown={nfChannels}
+          mpStores={s.mpStores}
+          cur={cur}
+          fmtMoney={fmtMoney}
+          variant="full"
+        />
       )}
 
       <div style={{ margin: "12px 16px 0" }}>
@@ -2877,7 +2973,7 @@ function bumpScanNotaUsed(bizId, userId) {
   return next;
 }
 
-function CatatTransaksi({ s, bizId, mutate, onSave, onNotify, onClose, business }) {
+function CatatTransaksi({ s, bizId, mutate, onSave, onNotify, onClose, business, features }) {
   const role = s.currentUser?.role || "kasir";
   const isKasir = role === "kasir";
   const expenseOnly = isKasir || role === "purchasing";
@@ -2955,7 +3051,10 @@ function CatatTransaksi({ s, bizId, mutate, onSave, onNotify, onClose, business 
               <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.1em", color: draft.type === "in" ? "var(--in-text)" : "var(--out-text)", textTransform: "uppercase" }}>{draft.type === "in" ? "Pemasukan" : "Pengeluaran"}</div>
               <div className="money" style={{ fontSize: 36, fontWeight: 800, color: draft.type === "in" ? "var(--in-text)" : "var(--out-text)", margin: "8px 0" }}>{fmtMoney(draft.amount, s.profile.currency)}</div>
               <div style={{ fontWeight: 600, color: "var(--ink)" }}>{draft.desc}</div>
-              <div style={{ fontSize: 13, color: "var(--ink3)", marginTop: 4 }}>{s.categories.find(c => c.id === draft.categoryId)?.name} · {s.wallets.find(w => w.id === draft.walletId)?.name}</div>
+              <div style={{ fontSize: 13, color: "var(--ink3)", marginTop: 4 }}>
+                {s.categories.find(c => c.id === draft.categoryId)?.name} · {s.wallets.find(w => w.id === draft.walletId)?.name}
+                {draft.meta?.storeName && ` · ${draft.meta.storeName}`}
+              </div>
             </>
           )}
         </Card>
@@ -3000,7 +3099,7 @@ function CatatTransaksi({ s, bizId, mutate, onSave, onNotify, onClose, business 
             <div style={{ fontSize: 13, color: "var(--brand)", fontWeight: 600, marginTop: 14 }}>Tips: Sebutkan barang + nominal uangnya.</div>
           </Card>
         )}
-        {mode === "manual" && <ManualForm s={s} mutate={mutate} onNotify={onNotify} onReady={setDraft} business={business} />}
+        {mode === "manual" && <ManualForm s={s} mutate={mutate} onNotify={onNotify} onReady={setDraft} business={business} features={features} />}
         {mode === "scan" && role !== "purchasing" && !isKasir && (
           <Card style={{ padding: 40, textAlign: "center", background: "var(--surface2)", border: "none" }}>
             <ScanLine size={44} color="var(--brand)" style={{ margin: "0 auto 12px" }} />
@@ -3087,9 +3186,18 @@ const ModeBtn = ({ active, onClick, Icon, label, disabled }) => (
   </button>
 );
 
-function ManualForm({ s, mutate, onNotify, onReady, business }) {
+function ManualForm({ s, mutate, onNotify, onReady, business, features }) {
   const role = s.currentUser?.role || "kasir";
   const myWallets = visibleWalletsForBusiness(s.wallets, s.currentUser, business);
+  const nfChannelFinance = useMemo(() => {
+    if (features?.nfChannelFinance === true) return true;
+    return isNfFishingBusiness(business, {
+      wallets: s.wallets,
+      categories: s.categories,
+      walletSetup: s.walletSetup,
+      profile: s.profile,
+    });
+  }, [features?.nfChannelFinance, business, s.wallets, s.categories, s.walletSetup, s.profile]);
 
   const allowedTypes = [];
   if (canDo(role, "inputIncome")) allowedTypes.push(["in", "Pemasukan"]);
@@ -3100,6 +3208,7 @@ function ManualForm({ s, mutate, onNotify, onReady, business }) {
   const [type, setType] = useState(allowedTypes[0][0]);
   const [amt, setAmt] = useState("");
   const [catId, setCatId] = useState("");
+  const [storeId, setStoreId] = useState("");
   const [walletId, setWalletId] = useState(myWallets[0]?.id || "");
   const [toWalletId, setToWalletId] = useState(myWallets[1]?.id || "");
   const [desc, setDesc] = useState("");
@@ -3123,16 +3232,41 @@ function ManualForm({ s, mutate, onNotify, onReady, business }) {
     });
   }, [type, walletId, transferTargetIds]);
 
-  const cats = visibleCategoriesForBusiness(
-    s.categories,
-    s.currentUser,
-    type === "transfer" ? "out" : type,
-    business
-  );
+  const cats = useMemo(() => {
+    const txType = type === "transfer" ? "out" : type;
+    const ctx = nfBusinessContext(s);
+    if (txType === "in") {
+      return visibleNfIncomeCategories(s.categories, s.currentUser, business, {
+        nfChannelFinance,
+        features,
+        ...ctx,
+      });
+    }
+    return visibleCategoriesForBusiness(s.categories, s.currentUser, txType, business);
+  }, [s, business, features, type, nfChannelFinance]);
   const catIds = cats.map((c) => c.id).join("|");
   useEffect(() => {
     setCatId((prev) => (cats.some((c) => c.id === prev) ? prev : cats[0]?.id || ""));
   }, [type, catIds]);
+
+  const selectedCat = cats.find((c) => c.id === catId);
+  const incomeGroups = useMemo(() => {
+    if (type !== "in" || !nfChannelFinance) return null;
+    return groupNfIncomeCategories(cats);
+  }, [type, nfChannelFinance, cats]);
+  const storeOptions = useMemo(
+    () => (nfChannelFinance && selectedCat ? mpStoresForCategory(catId, s.mpStores) : []),
+    [nfChannelFinance, catId, selectedCat, s.mpStores]
+  );
+  const storeRequired = storeOptions.length > 0;
+
+  useEffect(() => {
+    if (type !== "in" || !selectedCat?.defaultWalletId) return;
+    if (myWallets.some((w) => w.id === selectedCat.defaultWalletId)) {
+      setWalletId(selectedCat.defaultWalletId);
+    }
+    setStoreId("");
+  }, [catId, type, selectedCat?.defaultWalletId, walletIds]);
 
   const typeColors = { in: "var(--in)", out: "var(--out)", transfer: "var(--brand)" };
   const pillColor = typeColors[type];
@@ -3147,12 +3281,24 @@ function ManualForm({ s, mutate, onNotify, onReady, business }) {
         const err = checkFloor(walletId, +amt, s.wallets, s.transactions, s.currentUser);
         if (err) { setFloorErr(err); return; }
       }
-      onReady({ type, amount: +amt, categoryId: catId, walletId, desc, date, source: "Manual" });
+      const incomeMeta = type === "in" && nfChannelFinance ? buildMpIncomeMeta(selectedCat, storeId, s.mpStores) : null;
+      onReady({
+        type,
+        amount: +amt,
+        categoryId: catId,
+        walletId,
+        desc,
+        date,
+        source: "Manual",
+        ...(incomeMeta && Object.keys(incomeMeta).length ? { meta: incomeMeta } : {}),
+      });
     }
     setFloorErr("");
   };
 
-  const ready = amt && (type === "transfer" ? (walletId && toWalletId && walletId !== toWalletId) : catId);
+  const ready = amt && (type === "transfer"
+    ? (walletId && toWalletId && walletId !== toWalletId)
+    : (catId && (!storeRequired || storeId)));
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -3212,9 +3358,9 @@ function ManualForm({ s, mutate, onNotify, onReady, business }) {
               className="scroll-hide"
               style={{
                 display: "flex",
-                flexWrap: "wrap",
-                gap: 8,
-                maxHeight: 200,
+                flexDirection: "column",
+                gap: 10,
+                maxHeight: 280,
                 overflowY: "auto",
                 padding: 10,
                 borderRadius: 12,
@@ -3222,12 +3368,26 @@ function ManualForm({ s, mutate, onNotify, onReady, business }) {
                 background: "var(--surface2)",
               }}
             >
-              {cats.map((c) => (
+              {incomeGroups ? incomeGroups.map((grp) => (
+                <div key={grp.id}>
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--ink3)", marginBottom: 6 }}>{grp.label}</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    {grp.categories.map((c) => (
+                      <CatChip key={c.id} active={catId === c.id} color={pillColor} onClick={() => setCatId(c.id)}>
+                        {c.name}
+                      </CatChip>
+                    ))}
+                  </div>
+                </div>
+              )) : cats.map((c) => (
                 <CatChip key={c.id} active={catId === c.id} color={pillColor} onClick={() => setCatId(c.id)}>
                   {c.name}
                 </CatChip>
               ))}
             </div>
+            {selectedCat?.hint && (
+              <div style={{ marginTop: 6, fontSize: 11, color: "var(--ink3)", lineHeight: 1.4 }}>{selectedCat.hint}</div>
+            )}
             {mutate && (
               <CategoryQuickManage
                 compact
@@ -3242,6 +3402,20 @@ function ManualForm({ s, mutate, onNotify, onReady, business }) {
               />
             )}
           </Fld>
+          {storeOptions.length > 0 && (
+            <Fld label={storeRequired ? "Toko MP" : "Toko MP (opsional)"}>
+              <select
+                value={storeId}
+                onChange={(e) => setStoreId(e.target.value)}
+                style={manualFieldInput}
+              >
+                <option value="">{storeRequired ? "— Pilih toko —" : "— Tanpa toko —"}</option>
+                {storeOptions.map((st) => (
+                  <option key={st.id} value={st.id}>{st.name} · {st.code}</option>
+                ))}
+              </select>
+            </Fld>
+          )}
           <Fld label="Dompet">
             <select value={walletId} onChange={e => { setWalletId(e.target.value); setFloorErr(""); }}
               style={manualFieldInput}>
@@ -4590,6 +4764,99 @@ function OutletTargetSettingsScreen({ s, mutate, onClose }) {
 }
 
 // ─── Setting channel laporan (owner/admin) ─────────────────
+function MpStoreSettingsScreen({ s, mutate, onClose }) {
+  const stores = s.mpStores || hydrateMpStores(null);
+  const [platformId, setPlatformId] = useState(NF_MP_PLATFORMS[0]?.id || "tiktok");
+  const [name, setName] = useState("");
+  const [code, setCode] = useState("");
+  const [adding, setAdding] = useState(false);
+
+  const saveStores = (next) => {
+    mutate((d) => { d.mpStores = next; });
+  };
+
+  const patchStore = (id, patch) => {
+    saveStores(stores.map((st) => (st.id === id ? { ...st, ...patch } : st)));
+  };
+
+  const removeStore = (id) => {
+    saveStores(stores.filter((st) => st.id !== id));
+  };
+
+  const addStore = () => {
+    const label = name.trim();
+    if (!label) return;
+    const id = createMpStoreId(platformId, stores);
+    const storeCode = code.trim() || nextStoreCode(platformId, stores);
+    saveStores([
+      ...stores,
+      { id, platformId, code: storeCode, name: label, active: true, sort: (stores.length + 1) * 10 },
+    ]);
+    setName("");
+    setCode("");
+    setAdding(false);
+  };
+
+  const grouped = NF_MP_PLATFORMS.map((p) => ({
+    ...p,
+    stores: stores.filter((st) => st.platformId === p.id),
+  }));
+
+  return (
+    <Sheet title="Toko Marketplace" onClose={onClose}>
+      <div style={{ padding: "16px 16px 40px" }}>
+        <div style={{ fontSize: 13, color: "var(--ink2)", marginBottom: 14, padding: "12px 14px", background: "var(--in-soft)", borderRadius: 12, border: "1px solid #BBF7D0", lineHeight: 1.45 }}>
+          Daftar toko dipakai saat Admin catat <b>settlement MP</b>. Kode toko tersimpan otomatis di transaksi — tidak perlu ketik di catatan.
+        </div>
+        {grouped.map((plat) => (
+          <div key={plat.id} style={{ marginBottom: 18 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--ink3)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>{plat.label}</div>
+            <Card style={{ overflow: "hidden" }}>
+              {plat.stores.length === 0 ? (
+                <div style={{ padding: "14px 16px", fontSize: 13, color: "var(--ink3)" }}>Belum ada toko — tambah di bawah.</div>
+              ) : plat.stores.map((st) => (
+                <div key={st.id} style={{ padding: "12px 16px", borderBottom: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, color: "var(--ink)" }}>{st.name}</div>
+                    <div style={{ fontSize: 12, color: "var(--ink3)" }}>{st.code}</div>
+                  </div>
+                  <button type="button" onClick={() => patchStore(st.id, { active: st.active === false })} style={{ fontSize: 11, fontWeight: 700, padding: "6px 10px", borderRadius: 8, border: "1px solid var(--line)", background: st.active === false ? "var(--surface2)" : "var(--in-soft)", color: st.active === false ? "var(--ink3)" : "var(--in-text)", cursor: "pointer" }}>
+                    {st.active === false ? "Nonaktif" : "Aktif"}
+                  </button>
+                  <button type="button" onClick={() => removeStore(st.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--out-text)", padding: 4 }} title="Hapus"><Trash2 size={16} /></button>
+                </div>
+              ))}
+            </Card>
+          </div>
+        ))}
+        {adding ? (
+          <Card style={{ padding: 16, marginTop: 8 }}>
+            <Fld label="Platform">
+              <select value={platformId} onChange={(e) => { setPlatformId(e.target.value); setCode(""); }} style={manualFieldInput}>
+                {NF_MP_PLATFORMS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+              </select>
+            </Fld>
+            <Fld label="Nama toko">
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nusa Fishing Official" style={manualFieldInput} />
+            </Fld>
+            <Fld label="Kode toko">
+              <input value={code} onChange={(e) => setCode(e.target.value)} placeholder={nextStoreCode(platformId, stores)} style={manualFieldInput} />
+            </Fld>
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <button type="button" onClick={() => setAdding(false)} style={{ flex: 1, padding: 12, borderRadius: 10, border: "1px solid var(--line)", background: "var(--surface)", fontWeight: 600, cursor: "pointer" }}>Batal</button>
+              <button type="button" onClick={addStore} disabled={!name.trim()} style={{ flex: 1, padding: 12, borderRadius: 10, border: "none", background: name.trim() ? "var(--brand)" : "var(--ink3)", color: "#fff", fontWeight: 700, cursor: name.trim() ? "pointer" : "not-allowed" }}>Simpan</button>
+            </div>
+          </Card>
+        ) : (
+          <button type="button" onClick={() => setAdding(true)} style={{ width: "100%", marginTop: 8, padding: 14, borderRadius: 12, border: "1px dashed var(--line)", background: "var(--surface)", fontWeight: 700, color: "var(--brand)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+            <Plus size={18} /> Tambah toko
+          </button>
+        )}
+      </div>
+    </Sheet>
+  );
+}
+
 function ReportChannelSettingsScreen({ s, mutate, onClose }) {
   const [outlet, setOutlet] = useState(OUTLETS[0]);
   const channels = getAllReportChannels(s, outlet);
@@ -5187,6 +5454,15 @@ function PengaturanScreen({ s, mutate, onClose, setOverlay, setTab, bizId, authU
               <SRow icon={Banknote} label="Settle Laporan Kasir" sub="Channel non-tunai ke rekening · tunai laci ke Kas Besar" onClick={() => setOverlay("settleLaporan")} chev />
               <SRow icon={Smartphone} label="Daily Report Sosmed" sub="DM, komentar, Google review, komplain · isi harian" onClick={() => setOverlay("sosmedHarian")} chev />
               <SRow icon={Smartphone} label="Aktifkan Sosmed per Outlet" sub="KBU BURI UMAH, Kisamen, Samtaro" onClick={() => setOverlay("sosmedConfig")} chev />
+            </Card>
+          </>
+        )}
+
+        {features?.nfChannelFinance && canDo(role, "kelolaKategoriSemua") && (
+          <>
+            <Lbl>Channel NF</Lbl>
+            <Card style={{ marginBottom: 24 }}>
+              <SRow icon={Store} label="Toko Marketplace" sub="Daftar toko & kode per platform — untuk catat settlement MP" onClick={() => setOverlay("mpStores")} chev />
             </Card>
           </>
         )}
@@ -6430,7 +6706,7 @@ function VoidScreen({ s, mutate, user, reviewOnly = false }) {
   );
 }
 
-function WalletHistoryScreen({ s, business, walletId, onClose, sharedTxByWallet, bizId }) {
+function WalletHistoryScreen({ s, business, walletId, onClose, sharedTxByWallet, bizId, features }) {
   const user = s.currentUser || { role: "kasir" };
   const isShared = isSharedWallet({ id: walletId });
   const [loadingShared, setLoadingShared] = useState(false);
@@ -6472,26 +6748,41 @@ function WalletHistoryScreen({ s, business, walletId, onClose, sharedTxByWallet,
   const tx = useMemo(() => {
     if (!walletId) return [];
     if (isShared) {
-      const rows = sharedTxLocal || sharedTxByWallet?.[walletId] || [];
+      let rows = sharedTxLocal || sharedTxByWallet?.[walletId] || [];
+      if (features?.nfChannelFinance) {
+        rows = filterTransactionsForNfFinance(rows, s.categories, {
+          businessId: bizId,
+          role: user.role,
+          userId: user.id,
+        });
+      }
       return [...rows].sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.id || "").localeCompare(a.id || ""));
     }
-    return allVisibleTx
-      .filter((t) => {
-        if (t.type === "transfer") {
-          const { from, to } = resolveTransferIds(t);
-          return from === walletId || to === walletId;
-        }
-        return resolveWalletId(t) === walletId;
-      })
-      .sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.id || "").localeCompare(a.id || ""));
-  }, [allVisibleTx, walletId, isShared, sharedTxLocal, sharedTxByWallet]);
+    let local = allVisibleTx.filter((t) => {
+      if (t.type === "transfer") {
+        const { from, to } = resolveTransferIds(t);
+        return from === walletId || to === walletId;
+      }
+      return resolveWalletId(t) === walletId;
+    });
+    if (features?.nfChannelFinance) {
+      local = filterTransactionsForNfFinance(local, s.categories, {
+        businessId: bizId,
+        role: user.role,
+        userId: user.id,
+      });
+    }
+    return local.sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.id || "").localeCompare(a.id || ""));
+  }, [allVisibleTx, walletId, isShared, sharedTxLocal, sharedTxByWallet, features?.nfChannelFinance, s.categories, bizId, user.role, user.id]);
 
   return (
     <Sheet title={`Riwayat ${wallet?.name || "Dompet"}`} onClose={onClose}>
       <div style={{ padding: "12px 16px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
         {isShared && (
           <div style={{ fontSize: 12, color: "var(--ink3)", fontWeight: 600, padding: "0 2px 4px" }}>
-            Dompet bersama · data dari FNB
+            {features?.nfChannelFinance
+              ? "Rekening bersama · hanya catatan yang ditulis dari NF"
+              : "Dompet bersama · data dari FNB"}
           </div>
         )}
         {loadingShared && tx.length === 0 && (
@@ -6740,7 +7031,7 @@ export default function NF3App(props) {
       flushSave();
       await saveQueueRef.current.catch(() => {});
 
-      const cloudDoc = await loadState(bizId, { businessType: business?.type });
+      const cloudDoc = await loadState(bizId, { businessType: business?.type, business });
       const prev = sRef.current;
       if (quiet && cloudDoc?._cloudUpdatedAt && prev?._cloudUpdatedAt === cloudDoc._cloudUpdatedAt) {
         return;
@@ -6819,7 +7110,7 @@ export default function NF3App(props) {
     setS(null);
     lastSavePayloadRef.current = null;
     lastOwnSaveAtRef.current = null;
-    loadState(bizId, { businessType: business?.type })
+    loadState(bizId, { businessType: business?.type, business })
       .then(doc => {
         if (!alive) return;
         allowSaveRef.current = true;
@@ -6837,7 +7128,7 @@ export default function NF3App(props) {
       setLoadErr("Memuat terlalu lama — cek koneksi lalu muat ulang. Data awan tidak ditimpa.");
     }, 45000);
     return () => { alive = false; clearTimeout(watchdog); };
-  }, [bizId, business?.type, applyMemberUsers]);
+  }, [bizId, business?.type, business?.slug, applyMemberUsers]);
 
   // Patch daftar staf tanpa muat ulang seluruh app_state (~3MB / ribuan transaksi).
   useEffect(() => {
@@ -6905,7 +7196,27 @@ export default function NF3App(props) {
     if (!base?.wallets || !sharedMirror) return base;
     return { ...base, wallets: applyMirrorBalances(base.wallets, sharedMirror) };
   }, [s, authUser, sharedMirror]);
-  const features = useMemo(() => businessFeatures(business), [business]);
+  const features = useMemo(() => {
+    const ctx = nfBusinessContext(s);
+    const base = businessFeatures(business, ctx);
+    const nfActive = isNfFinanceScope(business, ctx);
+    return { ...base, isNfFishing: nfActive, nfChannelFinance: nfActive };
+  }, [business, s?.wallets, s?.categories, s?.walletSetup, s?.profile?.name, s?.profile?.businessType]);
+
+  useEffect(() => {
+    if (!s || !bizId || features.isFnB) return;
+    const ctx = nfBusinessContext(s);
+    if (!isNfFinanceScope(business, ctx)) return;
+    if (!needsNfChannelUpgrade(s.categories)) return;
+    setS((prev) => {
+      if (!prev || !needsNfChannelUpgrade(prev.categories)) return prev;
+      const nextCats = cleanCategoryList(ensureNfFishingCategories(prev.categories));
+      const patch = { ...prev, categories: nextCats, _nfCategoriesUpgraded: true };
+      if (!prev.mpStores) patch.mpStores = hydrateMpStores(null);
+      return patch;
+    });
+  }, [bizId, business, features.isFnB, s?.categories, s?.wallets, s?.walletSetup, s?.profile?.name]);
+
   const canonicalBusiness = useMemo(() => findCanonicalInList(businesses), [businesses]);
 
   const enabledSharedLinks = useMemo(
@@ -7012,7 +7323,7 @@ export default function NF3App(props) {
     if (name === "adjustSaldo" && !canDo(user.role, "editSaldoDompet")) return;
     if (name === "broadcast" && !canDo(user.role, "kirimPengumuman")) return;
     if (name === "voidReview" && !canDo(user.role, "reviewVoidLog")) return;
-    if (!isOverlayAllowedForBusiness(name, business)) {
+    if (!isOverlayAllowedForBusiness(name, business, { wallets: s?.wallets })) {
       // Jangan blok staf dengan gate "Pindah ke Nusa Food" — kasih tahu saja fitur tidak tersedia di NF.
       if (user?.role !== "owner") {
         showActionToast(fnbFeatureLabel(name) + " hanya di Nusa Food (F&B).", "error");
@@ -7171,6 +7482,38 @@ export default function NF3App(props) {
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
   }, [s?.profile?.theme]);
+
+  useEffect(() => {
+    if (!bizId || !s?._nfCategoriesUpgraded || !allowSaveRef.current) return;
+    setS((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev };
+      delete next._nfCategoriesUpgraded;
+      return next;
+    });
+    scheduleImmediateSave({ critical: true });
+    showActionToast("Kategori pemasukan NF diperbarui ke channel per platform.", "info", 4500);
+  }, [bizId, s?._nfCategoriesUpgraded, scheduleImmediateSave]);
+
+  useEffect(() => {
+    if (!bizId || !s?._nfTxRemapped || !allowSaveRef.current) return;
+    const stats = s._nfMpMigrationStats;
+    setS((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev };
+      delete next._nfTxRemapped;
+      delete next._nfMpMigrationStats;
+      return next;
+    });
+    scheduleImmediateSave({ critical: true });
+    if (stats?.migrated > 0) {
+      showActionToast(
+        `${stats.migrated} transaksi MP lama dipindah ke channel per platform${stats.storeTagged ? ` (${stats.storeTagged} dengan kode toko)` : ""}.`,
+        "info",
+        5000
+      );
+    }
+  }, [bizId, s?._nfTxRemapped, scheduleImmediateSave]);
 
   const addTx = async (d) => {
     const role = user.role || "kasir";
@@ -7404,7 +7747,7 @@ export default function NF3App(props) {
         )}
         <div className="nf3-scroll scroll-hide">
           {tab === "beranda"  && <Beranda s={view} setTab={setTab} setOverlay={openOverlay} onOpenLaporan={openLaporanHarian} hide={hide} setHide={setHide} onCloudSync={() => reloadFromCloud({ manual: true })} cloudSyncState={cloudSyncState} syncInfo={syncInfo} realtimeLive={realtimeLive} bizId={bizId} session={session} businessDisplayName={businessDisplayName} onCatat={openCatat} business={business} businesses={businesses} switchBusiness={switchBusiness} features={features} onOpenWalletHistory={openWalletHistory} sharedMirror={sharedMirror} sharedTxByWallet={sharedTxByWallet} />}
-          {tab === "laporan"  && <Laporan s={view} mutate={mutate} onOpenPair={() => openOverlay("pair")} onOpenPurchasingReport={() => openOverlay("laporanPurchasing")} business={business} features={features} webMode={effectiveWebMode} sharedTxByWallet={sharedTxByWallet} />}
+          {tab === "laporan"  && <Laporan s={view} mutate={mutate} onOpenPair={() => openOverlay("pair")} onOpenPurchasingReport={() => openOverlay("laporanPurchasing")} business={business} features={features} webMode={effectiveWebMode} sharedTxByWallet={sharedTxByWallet} bizId={bizId} />}
           {tab === "void" && features.voidOutlet && canDo(user.role, "inputVoid") && <VoidScreen s={view} mutate={mutate} user={user} />}
           {tab === "analisis" && features.fnbAnalisis && canDo(user.role, "lihatAnalisis") && <Analisis s={view} hideInsight={(id) => mutate(d => { if (!d.hiddenInsights) d.hiddenInsights = []; d.hiddenInsights.push(id); })} />}
           {tab === "asisten" && features.purchasingModule && showPurchasingAsistenTab(user.role) && <AsistenPurchasing s={view} bizId={bizId} />}
@@ -7417,7 +7760,7 @@ export default function NF3App(props) {
 
         {catat && user.role === "purchasing" && features.purchasingModule
           ? <PurchasingForm s={{ ...view, business: { id: bizId } }} onSave={addTx} onClose={() => setCatat(false)} />
-          : catat && <CatatTransaksi s={view} bizId={bizId} business={business} mutate={mutate} onNotify={showActionToast} onSave={addTx} onClose={() => setCatat(false)} />}
+          : catat && <CatatTransaksi s={view} bizId={bizId} business={business} features={features} mutate={mutate} onNotify={showActionToast} onSave={addTx} onClose={() => setCatat(false)} />}
         {fnbGate && user?.role === "owner" && (
           <FnbGateSheet
             target={fnbGate}
@@ -7446,7 +7789,13 @@ export default function NF3App(props) {
         {overlay === "nfBelanjaSearch" && user.role === "purchasing" && !features.purchasingModule && (
           <Sheet title="Cari Riwayat Belanja" onClose={() => setOverlay(null)}>
             <NfBelanjaSearch
-              transactions={mergeWithLocalTransactions(view?.transactions || [], sharedTxByWallet)}
+              transactions={features.nfChannelFinance
+                ? scopedNfFinanceTransactions(view?.transactions || [], sharedTxByWallet, view?.categories || [], {
+                  businessId: bizId,
+                  role: user.role,
+                  userId: user.id,
+                })
+                : mergeWithLocalTransactions(view?.transactions || [], sharedTxByWallet)}
               categories={view?.categories || []}
               wallets={view?.wallets || []}
               currency={view?.profile?.currency || "IDR"}
@@ -7464,6 +7813,7 @@ export default function NF3App(props) {
             walletId={walletHistoryId}
             sharedTxByWallet={sharedTxByWallet}
             bizId={bizId}
+            features={features}
             onClose={() => {
               setWalletHistoryId(null);
               setOverlay(null);
@@ -7505,6 +7855,7 @@ export default function NF3App(props) {
         {overlay === "settleLaporan" && features.settleLaci && canDo(user.role, "settleLaci") && <SettleLaporanScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
         {overlay === "outletTargets" && features.settleLaci && canDo(user.role, "settleLaci") && <OutletTargetSettingsScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
         {overlay === "reportChannels" && features.settleLaci && canDo(user.role, "settleLaci") && <ReportChannelSettingsScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
+        {overlay === "mpStores" && features.nfChannelFinance && canDo(user.role, "kelolaKategoriSemua") && <MpStoreSettingsScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
         {overlay === "pair"       && <PairScreen bizId={bizId} authUser={authUser} onClose={() => setOverlay(null)} />}
         {bizId && user?.role && user.role !== "purchasing" && features.isFnB && !overlay && (
           <NF3Assistant
