@@ -28,6 +28,7 @@ import {
   isFnBOnlyWallet,
   isNfPurchasingOpsWallet,
 } from "../../../lib/businessFeatures";
+import { remapNfTransactions } from "../../../lib/nfCategoryCatalog";
 import { resolveAuthMembership } from "../../../lib/membershipResolve";
 import { walletOptionLabel, walletBalanceDisplay, walletsForSaldoTotal, shouldHideWalletBalance, purchasingBalancePresentation, isKasKecilWalletDisplay, isLaciOutletWallet, laciBalancePresentation } from "../../../lib/walletDisplay";
 import { getAccountUi, navConfig } from "../../../lib/accountUi";
@@ -527,6 +528,7 @@ async function loadState(bizId, { businessType } = {}) {
       : cleanCategoryList(
           resolveCategoriesForBusiness(savedCats, { id: bizId, type: resolvedType }) || []
         );
+    const nfTx = isFnb ? { transactions: txs, changed: false } : remapNfTransactions(txs);
     return {
       ...base,
       ...savedClean,
@@ -535,7 +537,8 @@ async function loadState(bizId, { businessType } = {}) {
       walletSetup,
       wallets,
       categories,
-      transactions: txs,
+      transactions: nfTx.transactions,
+      _nfTxRemapped: nfTx.changed || undefined,
       profile: { ...base.profile, ...(savedClean.profile || saved.profile) },
       automation: { ...base.automation, ...(savedClean.automation || saved.automation) },
       dailyReports: savedClean.dailyReports || saved.dailyReports || base.dailyReports,
