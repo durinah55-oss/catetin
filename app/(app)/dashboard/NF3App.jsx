@@ -172,7 +172,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .pulse-ring{animation:pulse-ring 1.4s cubic-bezier(.4,0,.6,1) infinite}
 .nf3-shell{min-height:100dvh;background:var(--bg);display:flex;justify-content:center}
 .nf3-shell-inner{position:relative;width:100%;min-height:100dvh;background:var(--bg);overflow:hidden}
-.nf3-scroll{height:100dvh;overflow-y:auto;padding-bottom:calc(78px + env(safe-area-inset-bottom,0px))}
+.nf3-scroll{height:100dvh;overflow-y:auto;padding-bottom:calc(108px + env(safe-area-inset-bottom,0px))}
 .nf3-bottom-nav-wrap{position:fixed;bottom:0;left:0;right:0;display:flex;justify-content:center;z-index:10;pointer-events:none}
 .nf3-bottom-nav{pointer-events:auto;width:100%;background:var(--surface);border-top:1px solid var(--line);padding-bottom:calc(8px + env(safe-area-inset-bottom,0px))}
 @keyframes task-pulse-border{0%,100%{box-shadow:0 2px 12px rgba(99,102,241,.12)}50%{box-shadow:0 2px 18px rgba(99,102,241,.28)}}
@@ -1291,7 +1291,7 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
   const purchasingSaldo = user.role === "purchasing" ? purchasingBalancePresentation(totalSaldo, fmtMoney, cur) : null;
 
   return (
-    <div style={{ padding: "0 0 90px" }}>
+    <div style={{ padding: isNfPurchasing ? "0 0 120px" : "0 0 90px" }}>
       {/* header */}
       <div style={{ padding: "16px 20px 0", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -1332,16 +1332,18 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
 
       <SyncStatusStrip syncInfo={syncInfo} realtimeLive={realtimeLive} cloudSyncState={cloudSyncState} syncHint={syncInfo?.hint} />
 
-      <BusinessContextBanner
-        business={business}
-        businesses={businesses}
-        switchBusiness={switchBusiness}
-        features={features}
-        user={user}
-      />
+      {!isNfPurchasing && (
+        <BusinessContextBanner
+          business={business}
+          businesses={businesses}
+          switchBusiness={switchBusiness}
+          features={features}
+          user={user}
+        />
+      )}
 
       {/* saldo card */}
-      <div style={{ margin: "0 16px 20px" }}>
+      <div style={{ margin: isNfPurchasing ? "0 16px 16px" : "0 16px 20px" }}>
         <div style={{ background: ui.saldoGradient, borderRadius: 24, padding: "24px 24px 20px", position: "relative", overflow: "hidden", color: "#fff" }}>
           <div style={{ position: "absolute", width: 200, height: 200, borderRadius: "50%", background: "rgba(255,255,255,.08)", top: -60, right: -40 }} />
           <div style={{ position: "absolute", width: 120, height: 120, borderRadius: "50%", background: "rgba(255,255,255,.05)", bottom: -30, right: 60 }} />
@@ -1349,7 +1351,7 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
             <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase", opacity: .8 }}>TOTAL SALDO</span>
             <button onClick={() => setHide(v => !v)} style={{ background: "none", border: "none", color: "rgba(255,255,255,.85)", cursor: "pointer" }}>{hide ? <EyeOff size={20} /> : <Eye size={20} />}</button>
           </div>
-          <div className="money" style={{ fontSize: 38, fontWeight: 800, marginTop: 8, position: "relative" }}>
+          <div className="money" style={{ fontSize: isNfPurchasing ? 34 : 38, fontWeight: 800, marginTop: 8, position: "relative", lineHeight: 1.1 }}>
             {hide ? "••••••••" : purchasingSaldo ? purchasingSaldo.primary : fmtMoney(totalSaldo, cur)}
           </div>
           {purchasingSaldo?.secondary && !hide && (
@@ -6460,12 +6462,15 @@ function WalletHistoryScreen({ s, business, walletId, onClose, sharedTxByWallet,
 // ─── NavBar ────────────────────────────────────────────────
 function NavBar({ tab, setTab, onMic, user, business, micTitle, shellMaxWidth = 440 }) {
   const cfg = navConfig(user, business);
+  const feat = businessFeatures(business);
+  const isNfPurchasingNav = user?.role === "purchasing" && !feat.purchasingModule;
   const tabIcons = { beranda: Home, laporan: BarChart3, analisis: Sparkles, asisten: MessageCircle, void: Ban, profil: User };
+  const CenterIcon = isNfPurchasingNav ? Plus : Mic;
 
   const renderTab = (id, label, badge = 0) => {
     const Ic = tabIcons[id] || Home;
     return (
-      <button key={id} onClick={() => setTab(id)} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, background: "none", border: "none", cursor: "pointer", padding: "8px 0", position: "relative" }}>
+      <button key={id} onClick={() => setTab(id)} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, background: "none", border: "none", cursor: "pointer", padding: "8px 0", position: "relative", minWidth: 0 }}>
         <Ic size={22} color={tab === id ? "var(--brand)" : "var(--ink3)"} />
         {badge > 0 && <span style={{ position: "absolute", top: 2, right: "calc(50% - 18px)", minWidth: 14, height: 14, borderRadius: 99, background: "var(--out)", color: "#fff", fontSize: 9, fontWeight: 700, display: "grid", placeItems: "center", padding: "0 2px" }}>{badge}</span>}
         <span style={{ fontSize: 11, fontWeight: tab === id ? 700 : 400, color: tab === id ? "var(--brand)" : "var(--ink3)" }}>{label}</span>
@@ -6478,16 +6483,17 @@ function NavBar({ tab, setTab, onMic, user, business, micTitle, shellMaxWidth = 
 
   const ui = getAccountUi(user, business);
   const micGrad = ui.saldoGradient || "linear-gradient(135deg,#6366F1,#4F46E5)";
+  const centerTitle = isNfPurchasingNav ? "Catat belanja" : (micTitle || ui.micTitle);
 
   return (
     <div className="nf3-bottom-nav-wrap">
       <div className="nf3-bottom-nav" style={{ maxWidth: shellMaxWidth }}>
         <div className="nf3-bottom-nav-inner">
-          {left.map(([id, label, badge]) => renderTab(id, label, badge))}
-          <div style={{ width: 72, flexShrink: 0 }} />
-          {right.map(([id, label, badge]) => renderTab(id, label, badge))}
-          <button onClick={onMic} title={micTitle || ui.micTitle} style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", top: -20, width: 60, height: 60, borderRadius: 99, background: micGrad, border: "4px solid var(--surface)", display: "grid", placeItems: "center", cursor: "pointer", boxShadow: "0 4px 16px rgba(99,102,241,.45)" }}>
-            <Mic size={24} color="#fff" />
+          <div style={{ flex: 1, display: "flex", minWidth: 0 }}>{left.map(([id, label, badge]) => renderTab(id, label, badge))}</div>
+          <div style={{ width: 68, flexShrink: 0 }} />
+          <div style={{ flex: 1, display: "flex", minWidth: 0, justifyContent: right.length === 1 ? "center" : "stretch" }}>{right.map(([id, label, badge]) => renderTab(id, label, badge))}</div>
+          <button onClick={onMic} title={centerTitle} aria-label={centerTitle} style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", top: -16, width: 56, height: 56, borderRadius: 99, background: micGrad, border: "4px solid var(--surface)", display: "grid", placeItems: "center", cursor: "pointer", boxShadow: "0 4px 14px rgba(5,150,105,.35)", zIndex: 2 }}>
+            <CenterIcon size={isNfPurchasingNav ? 26 : 24} color="#fff" strokeWidth={isNfPurchasingNav ? 2.5 : 2} />
           </button>
         </div>
       </div>
