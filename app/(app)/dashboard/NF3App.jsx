@@ -1,10 +1,11 @@
 "use client";
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import dynamic from "next/dynamic";
-import { Home, BarChart3, Sparkles, User, Mic, Bell, Inbox, Cloud, Eye, EyeOff, Plus, Wallet, ChevronRight, ChevronLeft, ChevronUp, ChevronDown, Pencil, Trash2, ShoppingCart, Users, Zap, Store, PiggyBank, MoreHorizontal, Check, X, ArrowLeft, ScanLine, Keyboard, Fingerprint, Star, ShieldCheck, Monitor, RefreshCw, Sun, Moon, Smartphone, Copy, AlertTriangle, ClipboardList, ClipboardPaste, TrendingUp, TrendingDown, Loader2, Banknote, Filter, Ban, Share2, LogOut, Tags, MessageCircle, ArrowLeftRight, Upload } from "lucide-react";
+import { Home, BarChart3, Sparkles, User, Mic, Bell, Inbox, Cloud, Eye, EyeOff, Plus, Wallet, ChevronRight, ChevronLeft, ChevronUp, ChevronDown, Pencil, Trash2, ShoppingCart, Users, Zap, Store, PiggyBank, MoreHorizontal, Check, X, ArrowLeft, ScanLine, Keyboard, Fingerprint, Star, ShieldCheck, Monitor, RefreshCw, Sun, Moon, Smartphone, Copy, AlertTriangle, ClipboardList, ClipboardPaste, TrendingUp, TrendingDown, Loader2, Banknote, Filter, Ban, Share2, LogOut, Tags, MessageCircle, ArrowLeftRight, Upload, Search } from "lucide-react";
 import KategoriPurchasing from "../../../components/KategoriPurchasing";
 import LaporanPurchasing from "../../../components/LaporanPurchasing";
 import AsistenPurchasing from "../../../components/AsistenPurchasing";
+import NfBelanjaSearch from "../../../components/NfBelanjaSearch";
 import PurchasingAliasesReview from "../../../components/PurchasingAliasesReview";
 import { loadAppState, saveAppState, mergeAppStateData, mergeAppStateFromCloudPull, mergeCategoriesFromDb, cleanCategoryList, ensurePurchasingCategories, dedupeTransactionsById, aiParse, fetchBusinessAnalysis } from "../../../lib/appState";
 import { checkPurchasingFloor } from "../../../lib/purchasingExpense";
@@ -1173,20 +1174,37 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
       return nameText.includes(area) || idText.includes(area);
     }) || null;
   }, [hasExplicitWalletAssignment, assignedWallets, purchasingArea, myWallets]);
+  const isNfPurchasing = user.role === "purchasing" && !features?.purchasingModule;
+  const primaryPurchasingWallet = useMemo(() => {
+    if (user.role !== "purchasing") return null;
+    if (areaWallet) return areaWallet;
+    const opsShared = (myWallets || []).find(
+      (w) => isSharedWallet(w) && w.sharedLink?.linkKind === "ops_share" && /uang\s*nf/i.test(w.name || "")
+    );
+    if (opsShared) return opsShared;
+    const anySharedOps = (myWallets || []).find((w) => isSharedWallet(w) && w.sharedLink?.linkKind === "ops_share");
+    if (anySharedOps) return anySharedOps;
+    return myWallets.find((w) => w.purchasingUse || isNfPurchasingOpsWallet(w)) || myWallets[0] || null;
+  }, [user.role, areaWallet, myWallets]);
   const orderedWallets = useMemo(() => {
     if (!(user.role === "purchasing" && areaWallet?.id)) return myWallets;
     const first = myWallets.find((w) => w.id === areaWallet.id);
     const rest = myWallets.filter((w) => w.id !== areaWallet.id);
     return first ? [first, ...rest] : myWallets;
   }, [user.role, areaWallet?.id, myWallets]);
+  const localOrderedWallets = useMemo(() => {
+    if (!isNfPurchasing) return orderedWallets;
+    return orderedWallets.filter((w) => !isSharedWallet(w));
+  }, [isNfPurchasing, orderedWallets]);
   const scopedTx = useMemo(() => {
     const local = visibleTransactionsForBusiness(s.transactions, s.wallets, user, business);
     return mergeWithLocalTransactions(local, sharedTxByWallet);
   }, [s.transactions, s.wallets, user, business, sharedTxByWallet]);
   const summaryTx = useMemo(() => {
     if (user.role !== "purchasing") return scopedTx;
-    if (areaWallet?.id) {
-      const wid = areaWallet.id;
+    const focusWalletId = areaWallet?.id || primaryPurchasingWallet?.id || null;
+    if (focusWalletId) {
+      const wid = focusWalletId;
       return (scopedTx || []).filter((t) => {
         if (t.type === "transfer") {
           const { from, to } = resolveTransferIds(t);
@@ -1204,7 +1222,7 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
       return (scopedTx || []).filter((t) => sharedIds.has(resolveWalletId(t)));
     }
     return scopedTx;
-  }, [scopedTx, user.role, areaWallet?.id, myWallets]);
+  }, [scopedTx, user.role, areaWallet?.id, primaryPurchasingWallet?.id, myWallets]);
   const monthIn = useMemo(
     () => summaryTx.filter(t => t.type === "in" && t.date.startsWith(prefix)).reduce((a, b) => a + b.amount, 0),
     [summaryTx, prefix]
@@ -1212,6 +1230,14 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
   const monthOut = useMemo(
     () => summaryTx.filter(t => t.type === "out" && t.date.startsWith(prefix)).reduce((a, b) => a + b.amount, 0),
     [summaryTx, prefix]
+  );
+  const nfMonthOut = useMemo(
+    () => (scopedTx || []).filter((t) => t.type === "out" && t.date.startsWith(prefix)).reduce((a, b) => a + b.amount, 0),
+    [scopedTx, prefix]
+  );
+  const nfMonthOutCount = useMemo(
+    () => (scopedTx || []).filter((t) => t.type === "out" && t.date.startsWith(prefix)).length,
+    [scopedTx, prefix]
   );
   const totalSaldo = useMemo(() => {
     if (user.role !== "purchasing") {
@@ -1224,17 +1250,17 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
     const visibleBal = walletsForSaldoTotal(myWallets, user);
     if (!visibleBal.length) return 0;
     const primary =
-      (areaWallet && visibleBal.some((w) => w.id === areaWallet.id) ? areaWallet : null) ||
+      (primaryPurchasingWallet && visibleBal.some((w) => w.id === primaryPurchasingWallet.id) ? primaryPurchasingWallet : null) ||
       visibleBal.find((w) => w.purchasingUse || isNfPurchasingOpsWallet(w)) ||
       visibleBal[0];
     return primary ? walletBalance(primary.id, s.wallets, s.transactions) : 0;
-  }, [user.role, myWallets, s.wallets, s.transactions, areaWallet]);
+  }, [user.role, myWallets, s.wallets, s.transactions, primaryPurchasingWallet]);
   const inboxCount = canDo(user.role, "inputIncome") ? (s.rawInbox || []).length : 0;
   const notifCount = unreadStaffCount(s.staffMessages, user, s.dailyReports);
   const scopeLabel = user.role === "kasir"
     ? `Laci ${user.outlet}`
     : user.role === "purchasing"
-      ? (areaWallet?.name || (purchasingArea ? `Lokasi ${purchasingArea}` : "Dompet belanja"))
+      ? (primaryPurchasingWallet?.name || areaWallet?.name || (purchasingArea ? `Lokasi ${purchasingArea}` : "Dompet belanja"))
       : "Seluruh dompet";
   const waitingSettle = features.settleLaci && canDo(user.role, "settleLaci") ? pendingReports(s.dailyReports, s.transactions) : [];
   const awaitingVerify = features.settleLaci && canDo(user.role, "settleLaci") ? reportsAwaitingVerify(s.dailyReports, s.transactions) : [];
@@ -1331,24 +1357,182 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
               {purchasingSaldo.secondary}
             </div>
           )}
-          <div style={{ fontSize: 13, opacity: .7, marginTop: purchasingSaldo?.secondary ? 8 : 4, position: "relative" }}>{scopeLabel} · {new Date().toLocaleDateString("id-ID", { month: "long", year: "numeric" })}</div>
+          <div style={{ fontSize: 13, opacity: .7, marginTop: purchasingSaldo?.secondary ? 8 : 4, position: "relative" }}>
+            {isNfPurchasing ? `${scopeLabel} · saldo dompet` : `${scopeLabel} · ${new Date().toLocaleDateString("id-ID", { month: "long", year: "numeric" })}`}
+          </div>
           <div style={{ height: 1, background: "rgba(255,255,255,.2)", margin: "16px 0", position: "relative" }} />
+          {isNfPurchasing ? (
+            <div style={{ position: "relative" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
+                <div style={{ fontSize: 12, opacity: .85 }}>Pengeluaran {new Date().toLocaleDateString("id-ID", { month: "long" })}</div>
+                <div style={{ fontSize: 11, opacity: .75, whiteSpace: "nowrap" }}>{nfMonthOutCount} transaksi</div>
+              </div>
+              <div className="money" style={{ fontSize: 24, fontWeight: 800, marginTop: 6, color: "#FCA5A5", letterSpacing: "-0.02em" }}>
+                {hide ? "••••" : fmtMoney(nfMonthOut, cur, "−")}
+              </div>
+              <div style={{ fontSize: 11, opacity: .7, marginTop: 8 }}>Ketuk dompet di bawah untuk lihat riwayat</div>
+            </div>
+          ) : (
           <div style={{ display: "flex", justifyContent: "space-between", position: "relative" }}>
             <div><div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, opacity: .8 }}><span style={{ width: 8, height: 8, borderRadius: 99, background: "#4ADE80", display: "inline-block" }} />Pemasukan</div><div className="money" style={{ fontSize: 18, fontWeight: 700, marginTop: 4 }}>{hide ? "••••" : fmtMoney(monthIn, cur, "+")}</div></div>
             <div style={{ textAlign: "right" }}><div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, opacity: .8, justifyContent: "flex-end" }}>Pengeluaran<span style={{ width: 8, height: 8, borderRadius: 99, background: "#F87171", display: "inline-block" }} /></div><div className="money" style={{ fontSize: 18, fontWeight: 700, marginTop: 4, color: "#FCA5A5" }}>{hide ? "••••" : fmtMoney(monthOut, cur, "−")}</div></div>
           </div>
+          )}
         </div>
       </div>
 
       {/* dompet */}
+      {(() => {
+        const walletScrollStyle = {
+          padding: "0 20px",
+          display: "flex",
+          gap: 12,
+          overflowX: "auto",
+          paddingBottom: 8,
+          marginBottom: 24,
+          alignItems: "stretch",
+        };
+        const walletCardBase = {
+          width: 160,
+          minWidth: 160,
+          minHeight: 132,
+          padding: 16,
+          position: "relative",
+          overflow: "hidden",
+          flexShrink: 0,
+          display: "flex",
+          flexDirection: "column",
+          boxSizing: "border-box",
+        };
+
+        if (isNfPurchasing) {
+          const links = Array.isArray(s.walletSetup?.sharedLinks)
+            ? s.walletSetup.sharedLinks.filter((l) => l.enabled)
+            : [];
+          const opsLinks = links.filter((l) => l.linkKind === "ops_share");
+          const bankLinks = links.filter((l) => l.linkKind !== "ops_share");
+          const hasWallets = opsLinks.length > 0 || localOrderedWallets.length > 0;
+
+          const renderNfSharedCard = (link) => {
+            const m = sharedMirror?.[sharedWalletId(link)];
+            const label = link.label || link.sourceWalletName || "Dompet";
+            const isPaylater = link.sourceWalletType === "paylater";
+            const virtualId = sharedWalletId(link);
+            const accent = link.color || (isPaylater ? "#B45309" : "#DC2626");
+            return (
+              <Card
+                key={link.id}
+                onClick={() => onOpenWalletHistory?.(virtualId)}
+                style={{ ...walletCardBase, cursor: "pointer" }}
+              >
+                <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: accent }} />
+                <div style={{ height: 40, display: "flex", alignItems: "center", fontSize: 28, lineHeight: 1, marginBottom: 8 }}>
+                  {isPaylater ? "💳" : "👛"}
+                </div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--ink2)", lineHeight: 1.35, minHeight: 34 }}>
+                  {label}
+                </div>
+                <div style={{ marginTop: "auto", paddingTop: 8 }}>
+                  <div className="money" style={{ fontSize: 16, fontWeight: 700, color: isPaylater && m?.balance < 0 ? "#B45309" : "var(--ink)" }}>
+                    {hide ? "•••" : m ? (m.missing ? "—" : fmtMoney(m.balance, cur)) : "…"}
+                  </div>
+                  <div style={{ fontSize: 10, color: "var(--ink3)", fontWeight: 600, marginTop: 4 }}>
+                    {isPaylater ? "Hutang · ketuk riwayat" : "Ketuk untuk riwayat"}
+                  </div>
+                </div>
+              </Card>
+            );
+          };
+
+          return (
+            <>
+              <div style={{ padding: "0 20px", marginBottom: 12 }}>
+                <div style={{ fontSize: 17, fontWeight: 700, color: "var(--ink)" }}>{ui.walletSectionTitle}</div>
+                <div style={{ fontSize: 12, color: "var(--ink3)", fontWeight: 500, marginTop: 4 }}>Ketuk dompet untuk lihat riwayat belanja</div>
+              </div>
+              {!hasWallets ? (
+                <Card style={{ margin: "0 20px 24px", padding: 16, background: "var(--surface2)", border: "1px dashed var(--line)" }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ink)" }}>Belum ada dompet belanja</div>
+                  <div style={{ fontSize: 12, color: "var(--ink3)", marginTop: 6, lineHeight: 1.45 }}>
+                    Minta admin aktifkan Uang NF / PayLater atau dompet operasional.
+                  </div>
+                </Card>
+              ) : (
+                <div style={walletScrollStyle} className="scroll-hide">
+                  {opsLinks.map(renderNfSharedCard)}
+                  {localOrderedWallets.map((w) => {
+                    const bal = walletBalance(w.id, s.wallets, s.transactions);
+                    const paylaterDebt = isPaylaterWallet(w) && bal < 0;
+                    return (
+                      <Card
+                        key={w.id}
+                        onClick={() => onOpenWalletHistory?.(w.id)}
+                        style={{ ...walletCardBase, cursor: "pointer", border: paylaterDebt ? "1px solid #FDE68A" : undefined }}
+                      >
+                        <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: w.color }} />
+                        <div style={{ height: 40, display: "flex", alignItems: "center", marginBottom: 8 }}>
+                          <WalletIcon wallet={w} size={36} />
+                        </div>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: "var(--ink2)", lineHeight: 1.35, minHeight: 34 }}>
+                          {foodWalletDisplayName(w)}
+                        </div>
+                        <div style={{ marginTop: "auto", paddingTop: 8 }}>
+                          <div className="money" style={{ fontSize: 16, fontWeight: 700, color: paylaterDebt ? "#B45309" : "var(--ink)" }}>
+                            {hide ? "•••" : formatWalletBal(w, bal, cur, user)}
+                          </div>
+                          <div style={{ fontSize: 10, color: "var(--ink3)", fontWeight: 600, marginTop: 4 }}>Ketuk untuk riwayat</div>
+                        </div>
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
+              {bankLinks.length > 0 && (
+                <>
+                  <div style={{ padding: "0 20px", marginBottom: 10 }}>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: "var(--ink)" }}>Rekening terhubung</div>
+                    <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: 2 }}>Catat keluar · saldo disembunyikan</div>
+                  </div>
+                  <div style={{ ...walletScrollStyle, marginBottom: 24 }} className="scroll-hide">
+                    {bankLinks.map((link) => {
+                      const virtualId = sharedWalletId(link);
+                      return (
+                        <Card
+                          key={link.id}
+                          onClick={() => onOpenWalletHistory?.(virtualId)}
+                          style={{ ...walletCardBase, cursor: "pointer", opacity: 0.95 }}
+                        >
+                          <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "#6B7280" }} />
+                          <div style={{ height: 40, display: "flex", alignItems: "center", fontSize: 26, marginBottom: 8 }}>🔗</div>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--ink2)", lineHeight: 1.35, minHeight: 34 }}>
+                            {link.label || link.sourceWalletName}
+                          </div>
+                          <div style={{ marginTop: "auto", paddingTop: 8 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink3)" }}>Hanya catat keluar</div>
+                            <div style={{ fontSize: 10, color: "var(--ink3)", marginTop: 4 }}>Ketuk untuk riwayat</div>
+                          </div>
+                        </Card>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </>
+          );
+        }
+
+        return (
+          <>
       <div style={{ padding: "0 20px", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <span style={{ fontSize: 17, fontWeight: 700, color: "var(--ink)" }}>{ui.walletSectionTitle}</span>
+        <div>
+          <span style={{ fontSize: 17, fontWeight: 700, color: "var(--ink)" }}>{ui.walletSectionTitle}</span>
+        </div>
         {canDo(user.role, "kelolaDompet") && (
           <button onClick={() => setOverlay("wallets")} style={{ fontSize: 13, fontWeight: 600, color: "var(--brand)", background: "none", border: "none", cursor: "pointer" }}>Kelola dompet</button>
         )}
       </div>
-      <div style={{ paddingLeft: 16, display: "flex", gap: 12, overflowX: "auto", paddingBottom: 4, paddingRight: 16, marginBottom: 24 }} className="scroll-hide">
-        {orderedWallets.length === 0 && user.role === "purchasing" && (
+      <div style={{ padding: "0 20px", display: "flex", gap: 12, overflowX: "auto", paddingBottom: 8, marginBottom: 24, alignItems: "stretch" }} className="scroll-hide">
+        {localOrderedWallets.length === 0 && user.role === "purchasing" && (
           <Card style={{ minWidth: 260, padding: 16, background: "var(--surface2)", border: "1px dashed var(--line)" }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ink)" }}>Belum ada dompet belanja</div>
             <div style={{ fontSize: 12, color: "var(--ink3)", marginTop: 6, lineHeight: 1.45 }}>
@@ -1356,7 +1540,7 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
             </div>
           </Card>
         )}
-        {orderedWallets.map(w => {
+        {localOrderedWallets.map(w => {
           const bal = walletBalance(w.id, s.wallets, s.transactions);
           const laciWarn = isLaciOutletWallet(w) && bal < (w.floor ?? LACI_FLOOR);
           const floorHint = !isPaylaterWallet(w) && !laciWarn ? walletFloorHint(bal, w.floor) : null;
@@ -1421,9 +1605,13 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
           );
         })}
       </div>
+          </>
+        );
+      })()}
 
       {/* Dompet bersama FNB (Uang NF, PayLater) + rekening Sam — saldo dari FNB. */}
       {(() => {
+        if (isNfPurchasing) return null;
         if (features?.isFnB || !canWriteSharedBank(user?.role)) return null;
         const links = Array.isArray(s.walletSetup?.sharedLinks)
           ? s.walletSetup.sharedLinks.filter((l) => l.enabled)
@@ -1478,7 +1666,7 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
                   <span style={{ fontSize: 17, fontWeight: 700, color: "var(--ink)" }}>Dompet bersama</span>
                   <span style={{ fontSize: 11, fontWeight: 700, color: "var(--ink3)" }}>Uang NF & PayLater · FNB</span>
                 </div>
-                <div style={{ paddingLeft: 16, display: "flex", gap: 12, overflowX: "auto", paddingBottom: 4, paddingRight: 16, marginBottom: 24 }} className="scroll-hide">
+                <div style={{ padding: "0 20px", display: "flex", gap: 12, overflowX: "auto", paddingBottom: 8, marginBottom: 24, alignItems: "stretch" }} className="scroll-hide">
                   {opsLinks.map((link) => renderSharedCard(link, { showBalance: true, accent: link.color, canOpenHistory: true }))}
                 </div>
               </>
@@ -1491,7 +1679,7 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
                     {isPurchasing ? "Catat keluar · tanpa lihat saldo" : "Saldo FNB · masuk & keluar"}
                   </span>
                 </div>
-                <div style={{ paddingLeft: 16, display: "flex", gap: 12, overflowX: "auto", paddingBottom: 4, paddingRight: 16, marginBottom: 24 }} className="scroll-hide">
+                <div style={{ padding: "0 20px", display: "flex", gap: 12, overflowX: "auto", paddingBottom: 8, marginBottom: 24, alignItems: "stretch" }} className="scroll-hide">
                   {bankLinks.map((link) =>
                     renderSharedCard(link, { showBalance: !isPurchasing, accent: "#6B7280", canOpenHistory: true })
                   )}
@@ -1591,7 +1779,7 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
         }
 
         if (role === "purchasing" && !features.purchasingModule) {
-          const primaryWallet = areaWallet || myWallets.find((w) => w.purchasingUse) || myWallets[0];
+          const primaryWallet = primaryPurchasingWallet || myWallets.find((w) => w.purchasingUse) || myWallets[0];
           const saldoHint = primaryWallet
             ? walletBalance(primaryWallet.id, s.wallets, s.transactions)
             : 0;
@@ -1606,6 +1794,14 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
                   : "Belum ada belanja tercatat — tap untuk catat pengeluaran",
               done: todayOutTx.length > 0,
               onClick: () => onCatat?.(),
+            },
+            {
+              id: "cari",
+              title: "Cari Riwayat Belanja",
+              subtitle: "Beli dimana? Ketik nama barang / toko / kategori",
+              done: false,
+              optional: true,
+              onClick: () => setOverlay("nfBelanjaSearch"),
             },
           ];
           return (
@@ -1744,9 +1940,16 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
       })()}
 
       {/* transaksi terbaru */}
-      <div style={{ padding: "20px 20px 0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span style={{ fontSize: 17, fontWeight: 700, color: "var(--ink)" }}>Transaksi Terbaru</span>
-        <button type="button" onClick={() => setTab("laporan")} style={{ fontSize: 13, fontWeight: 600, color: "var(--brand)", background: "none", border: "none", cursor: "pointer", padding: 0 }}>Lihat Semua</button>
+      <div style={{ padding: "20px 20px 0", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+        <span style={{ fontSize: 17, fontWeight: 700, color: "var(--ink)", flexShrink: 0 }}>Transaksi Terbaru</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+          {isNfPurchasing && (
+            <button type="button" onClick={() => setOverlay("nfBelanjaSearch")} style={{ fontSize: 13, fontWeight: 600, color: "var(--ink2)", background: "var(--surface2)", border: "1px solid var(--line)", borderRadius: 99, cursor: "pointer", padding: "6px 12px", display: "flex", alignItems: "center", gap: 5 }}>
+              <Search size={14} /> Cari
+            </button>
+          )}
+          <button type="button" onClick={() => setTab("laporan")} style={{ fontSize: 13, fontWeight: 600, color: "var(--brand)", background: "none", border: "none", cursor: "pointer", padding: 0, whiteSpace: "nowrap" }}>Lihat Semua</button>
+        </div>
       </div>
       {(() => {
         const recent = [...scopedTx].sort((a, b) => (b.date + b.id).localeCompare(a.date + a.id)).slice(0, 10);
@@ -7157,6 +7360,20 @@ export default function NF3App(props) {
         {overlay === "broadcast" && canDo(user.role, "kirimPengumuman") && <BroadcastScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} />}
         {overlay === "adjustSaldo" && canDo(user.role, "editSaldoDompet") && <AdjustSaldoScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} business={business} />}
         {overlay === "wallets" && canDo(user.role, "kelolaDompet") && <WalletScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} bizId={bizId} businesses={businesses} features={features} />}
+        {overlay === "nfBelanjaSearch" && user.role === "purchasing" && !features.purchasingModule && (
+          <Sheet title="Cari Riwayat Belanja" onClose={() => setOverlay(null)}>
+            <NfBelanjaSearch
+              transactions={mergeWithLocalTransactions(view?.transactions || [], sharedTxByWallet)}
+              categories={view?.categories || []}
+              wallets={view?.wallets || []}
+              currency={view?.profile?.currency || "IDR"}
+              fmtMoney={fmtMoney}
+              shortDate={shortDate}
+              walletLabel={(id) => foodWalletDisplayName(view?.wallets?.find((w) => w.id === id))}
+              onClose={() => setOverlay(null)}
+            />
+          </Sheet>
+        )}
         {overlay === "walletHistory" && walletHistoryId && (
           <WalletHistoryScreen
             s={view}
