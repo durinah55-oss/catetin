@@ -35,6 +35,7 @@ import {
   getPeriodBounds, shiftAnchor, filterTransactions, buildCashflowChart,
   sumInOut, formatPeriodLabel, localISO,
 } from "../../../lib/laporanKeuangan";
+import { computeNfProfit } from "../../../lib/nfProfitReport";
 import { submitDailyReport, resubmitDailyReport, settleDailyReport, verifyDailyReportAdmin, requestDailyReportRevision, deleteDailyReport, collectAllDailyReportTxIds, pendingReports, reportsAwaitingVerify, reportsReadyToSettle, reportsAwaitingRevision, reportsForDate, findPendingRevisionReport, reportAwaitingKasirRevision, reportCashAmount, reportSettleUrgency, reportSettleDeadlineLabel, reconcileDailyReports, allDailyReportsForAdmin, LACI_BY_OUTLET, LACI_FLOOR } from "../../../lib/kasirHarian";
 import { submitVoidLog, pendingVoidLogs, reviewVoidLog, visibleVoidLogs, VOID_TYPES } from "../../../lib/voidLog";
 import {
@@ -2065,6 +2066,12 @@ function Laporan({ s, mutate, onOpenPair, onOpenPurchasingReport, business, feat
 
   const { inSum, outSum, net, count } = useMemo(() => sumInOut(tx), [tx]);
 
+  const showNfLabaRugi = !features.isFnB && canDo(user.role, "lihatLaporanPenuh");
+  const nfProfit = useMemo(() => {
+    if (!showNfLabaRugi) return null;
+    return computeNfProfit(scopedBase, s.categories, { start: bounds.start, end: bounds.end });
+  }, [showNfLabaRugi, scopedBase, s.categories, bounds.start, bounds.end]);
+
   const chart = useMemo(
     () => buildCashflowChart(tx, bounds.start, bounds.end, shortDate),
     [tx, bounds.start, bounds.end]
@@ -2326,7 +2333,74 @@ function Laporan({ s, mutate, onOpenPair, onOpenPurchasingReport, business, feat
         </Card>
       </div>
 
+      {showNfLabaRugi && nfProfit && (
+        <div style={{ margin: "0 16px 12px" }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink2)", marginBottom: 8 }}>Laba Rugi NF</div>
+          <Card style={{ overflow: "hidden" }}>
+            {[
+              { label: "Omzet bersih", value: nfProfit.omzetBersih, tone: "ink" },
+              { label: "Modal produk (HPP)", value: -nfProfit.hpp, tone: "out" },
+              { label: "Laba kotor", value: nfProfit.labaKotor, tone: "ink", bold: true },
+              ...(nfProfit.biayaMarketplace > 0 ? [{ label: "Biaya marketplace", value: -nfProfit.biayaMarketplace, tone: "out" }] : []),
+              { label: "Biaya operasional", value: -nfProfit.biayaOperasional, tone: "out" },
+            ].map((row) => (
+              <div key={row.label} style={{ padding: "10px 16px", borderBottom: "1px solid var(--line)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 13, color: "var(--ink2)", fontWeight: row.bold ? 700 : 500 }}>{row.label}</span>
+                <span className="money" style={{ fontSize: row.bold ? 15 : 14, fontWeight: row.bold ? 800 : 600, color: row.tone === "out" ? "var(--out-text)" : "var(--ink)" }}>
+                  {row.value < 0 ? "−" : ""}{fmtMoney(Math.abs(row.value), cur)}
+                </span>
+              </div>
+            ))}
+            <div style={{ padding: "12px 16px", background: "var(--surface2)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontWeight: 800, color: "var(--ink)" }}>Laba bersih NF</span>
+              <span className="money" style={{ fontSize: 20, fontWeight: 800, color: nfProfit.labaBersih >= 0 ? "var(--in-text)" : "var(--out-text)" }}>
+                {nfProfit.labaBersih >= 0 ? "▲ " : "▼ "}{fmtMoney(Math.abs(nfProfit.labaBersih), cur)}
+              </span>
+            </div>
+            {(nfProfit.prive > 0 || nfProfit.transfer > 0 || nfProfit.capex > 0) && (
+              <div style={{ padding: "10px 16px 12px", borderTop: "1px solid var(--line)", background: "#FFFBEB" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#92400E", marginBottom: 6 }}>Tidak mengurangi laba NF</div>
+                {nfProfit.prive > 0 && (
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#78350F", marginBottom: 4 }}>
+                    <span>Prive / transfer owner</span>
+                    <span className="money">{fmtMoney(nfProfit.prive, cur)}</span>
+                  </div>
+                )}
+                {nfProfit.transfer > 0 && (
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#78350F", marginBottom: 4 }}>
+                    <span>Transfer internal</span>
+                    <span className="money">{fmtMoney(nfProfit.transfer, cur)}</span>
+                  </div>
+                )}
+                {nfProfit.capex > 0 && (
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#78350F" }}>
+                    <span>Pembelian alat</span>
+                    <span className="money">{fmtMoney(nfProfit.capex, cur)}</span>
+                  </div>
+                )}
+              </div>
+            )}
+            {nfProfit.warnings?.length > 0 && (
+              <div style={{ padding: "10px 16px", borderTop: "1px solid #FDE68A", background: "#FFFBEB" }}>
+                {nfProfit.warnings.map((w) => (
+                  <div key={w} style={{ fontSize: 11, color: "#92400E", lineHeight: 1.45, display: "flex", gap: 6, marginBottom: 4 }}>
+                    <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+                    <span>{w}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+          <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: 6, lineHeight: 1.45 }}>
+            Omzet bersih = penjualan − diskon/retur/refund. Prive owner hanya memengaruhi arus kas, bukan laba.
+          </div>
+        </div>
+      )}
+
       <div style={{ margin: "12px 16px 0" }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink2)", marginBottom: 8 }}>
+          {showNfLabaRugi ? "Arus Kas" : "Ringkasan"}
+        </div>
         <Card style={{ overflow: "hidden" }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr" }}>
             <div style={{ padding: "14px 16px", borderRight: "1px solid var(--line)" }}>
@@ -2339,7 +2413,7 @@ function Laporan({ s, mutate, onOpenPair, onOpenPurchasingReport, business, feat
             </div>
           </div>
           <div style={{ padding: "12px 16px", borderTop: "1px solid var(--line)", background: "var(--surface2)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontWeight: 700, color: "var(--ink)" }}>Laba Bersih</span>
+            <span style={{ fontWeight: 700, color: "var(--ink)" }}>{showNfLabaRugi ? "Arus kas bersih" : "Laba Bersih"}</span>
             <span className="money" style={{ fontSize: 20, fontWeight: 800, color: net >= 0 ? "var(--in-text)" : "var(--out-text)" }}>
               {net >= 0 ? "▲ " : "▼ "}{fmtMoney(Math.abs(net), cur)}
             </span>
