@@ -1,22 +1,30 @@
 "use client";
 // app/(app)/settings/invite/page.jsx
 // Form undang staf → buat invite di Supabase → tampilkan link untuk dikirim via WhatsApp.
-// Alur: owner isi email + role + outlet → dapat link /login?invite=TOKEN.
+// Alur: owner isi email + role + penempatan kerja (outlet kasir / lokasi pembelian purchasing) → dapat link /login?invite=TOKEN.
 
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useApp } from "../../../../components/layout/BusinessProvider";
 import { canDo } from "../../../../lib/rbac";
+import { isFnBBusiness } from "../../../../lib/businessFeatures";
 
-const ROLES = [
+const ALL_ROLES = [
   { v: "kasir", l: "Kasir", d: "Catat pemasukan & pengeluaran outlet" },
   { v: "purchasing", l: "Purchasing", d: "Belanja / kas kecil" },
-  { v: "admin", l: "Admin Keuangan", d: "Transfer antar kas/laci, settle omset, void, kelola dompet (tanpa undang)" },
+  { v: "admin", l: "Admin Keuangan", d: "Transfer antar kas, settle, kelola dompet (tanpa undang)" },
 ];
 
 export default function InvitePage() {
-  const { s, inviteStaff, authUser, loading: appLoading } = useApp();
+  const { s, inviteStaff, authUser, business, loading: appLoading } = useApp();
   const router = useRouter();
+
+  // Bisnis non-F&B (mis. NF Nusa Fishing) tidak pakai Kasir/outlet — sistemnya beda.
+  const isFnb = isFnBBusiness(business);
+  const roles = useMemo(
+    () => (isFnb ? ALL_ROLES : ALL_ROLES.filter((r) => r.v !== "kasir")),
+    [isFnb]
+  );
 
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("kasir");
@@ -26,6 +34,11 @@ export default function InvitePage() {
   const [err, setErr] = useState("");
   const [copied, setCopied] = useState(false);
 
+  // FNB: default tetap "kasir". Non-F&B (Fishing) yang sudah termuat: pindah dari kasir → admin.
+  useEffect(() => {
+    if (business && !isFnb && role === "kasir") setRole("admin");
+  }, [business, isFnb, role]);
+
   const canInvite = canDo(s?.currentUser?.role || authUser?.role, "undangStaf");
 
   const submit = async (e) => {
@@ -34,7 +47,7 @@ export default function InvitePage() {
       setErr("Kasir wajib pilih outlet (KBU, KSM, atau SMT).");
       return;
     }
-    const outletForInvite = role === "kasir" ? outlet.trim() : null;
+    const outletForInvite = role === "kasir" || role === "purchasing" ? outlet.trim() || null : null;
     setLoading(true); setErr(""); setResult(null);
     try {
       const inv = await inviteStaff({ email: email.trim() || null, role, outlet: outletForInvite });
@@ -88,7 +101,7 @@ export default function InvitePage() {
 
             <Field label="Peran">
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {ROLES.map((r) => (
+                {roles.map((r) => (
                   <button key={r.v} type="button" onClick={() => pickRole(r.v)}
                     style={{ textAlign: "left", padding: "12px 14px", borderRadius: 12, cursor: "pointer",
                       border: `1.5px solid ${role === r.v ? "#6366F1" : "#E8E8F0"}`,
@@ -115,11 +128,15 @@ export default function InvitePage() {
                 <input value={outlet} onChange={(e) => setOutlet(e.target.value.toUpperCase())}
                   placeholder="KBU, KSM, atau SMT" style={inp} />
               </Field>
+            ) : role === "purchasing" ? (
+              <Field label="Lokasi pembelian purchasing (opsional)">
+                <input value={outlet} onChange={(e) => setOutlet(e.target.value)}
+                  placeholder="Contoh: Jagasatru" style={inp} />
+                <div style={hint}>Isi lokasi pembelian jika purchasing khusus area tertentu. Kosong = purchasing umum.</div>
+              </Field>
             ) : (
               <div style={{ padding: "12px 14px", borderRadius: 12, background: role === "purchasing" ? "#ECFDF5" : "#EEF2FF", border: `1px solid ${role === "purchasing" ? "#A7F3D0" : "#C7D2FE"}`, fontSize: 13, color: "#374151", lineHeight: 1.5 }}>
-                {role === "purchasing"
-                  ? "Purchasing tidak pakai outlet — akses semua dompet belanja (Kas Kecil, rekening bayar, e-wallet). Jangan pilih KBU/KSM/SMT."
-                  : "Admin Keuangan tidak pakai outlet — kelola semua outlet dari satu akun."}
+                Admin Keuangan tidak pakai outlet — kelola semua outlet dari satu akun.
               </div>
             )}
 

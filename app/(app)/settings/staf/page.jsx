@@ -15,6 +15,8 @@ const ROLE_COLOR = {
   kasir:      { bg: "#DCFCE7", text: "#15803D" },
   purchasing: { bg: "#FEF3C7", text: "#D97706" },
 };
+const KASIR_OUTLETS = new Set(["KBU", "KSM", "SMT"]);
+const isPurchasingArea = (m) => m?.role === "purchasing" && !!m?.outlet && !KASIR_OUTLETS.has(String(m.outlet).toUpperCase());
 
 export default function StafPage() {
   const { bizId, s } = useApp();
@@ -108,7 +110,9 @@ export default function StafPage() {
                         <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99,
                           background: rc.bg, color: rc.text }}>{ROLE_LABEL[inv.role] || inv.role}</span>
                         {inv.outlet && <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99,
-                          background: "#EEF2FF", color: "#4338CA" }}>{inv.outlet}</span>}
+                          background: "#EEF2FF", color: "#4338CA" }}>
+                          {inv.role === "purchasing" ? `Lokasi: ${inv.outlet}` : inv.outlet}
+                        </span>}
                         <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99,
                           background: "#FEF3C7", color: "#B45309" }}>Menunggu daftar/login</span>
                       </div>
@@ -141,8 +145,16 @@ export default function StafPage() {
                   <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
                     <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99,
                       background: rc.bg, color: rc.text }}>{ROLE_LABEL[m.role] || m.role}</span>
-                    {m.outlet && <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99,
-                      background: "#EEF2FF", color: "#4338CA" }}>{m.outlet}</span>}
+                    {m.outlet && (
+                      <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99,
+                        background: "#EEF2FF", color: "#4338CA" }}>
+                        {m.role === "purchasing" ? `Lokasi: ${m.outlet}` : m.outlet}
+                      </span>
+                    )}
+                    {isPurchasingArea(m) && (
+                      <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 99,
+                        background: "#E0F2FE", color: "#0C4A6E" }}>Lokasi khusus</span>
+                    )}
                     {!m.active && <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99,
                       background: "#F3F4F6", color: "#9CA3AF" }}>nonaktif</span>}
                   </div>

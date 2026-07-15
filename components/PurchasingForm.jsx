@@ -19,7 +19,7 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { Mic, Loader2, Sparkles } from "lucide-react";
 import { visibleWallets, visibleCategories } from "../lib/rbac";
-import { addPurchasingExpense, PURCHASING_OUTLETS, formatRupiah, checkPurchasingFloor } from "../lib/purchasingExpense";
+import { addPurchasingExpense, PURCHASING_OUTLETS, formatRupiah, checkPurchasingFloor, purchasingOutletOptions } from "../lib/purchasingExpense";
 import { ensurePurchasingCategories } from "../lib/purchasingCategories";
 import { walletBalance } from "../lib/kasirHarian";
 import { walletOptionLabel } from "../lib/walletDisplay";
@@ -63,6 +63,61 @@ function calcItemsTotal(items) {
     (sum, i) => sum + (Number(i.qty) || 0) * (Number(i.unitPrice) || 0),
     0
   );
+}
+
+function normItemText(v) {
+  return String(v || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function sanitizeParsedItems(items, amount) {
+  const cleaned = (items || [])
+    .filter((i) => i?.name)
+    .map((i) => ({
+      name: String(i.name).trim(),
+      qty: Math.max(0, Number(i.qty) || 0),
+      unit: String(i.unit || "pcs").trim() || "pcs",
+      unitPrice: Math.max(0, Math.round(Number(i.unitPrice) || 0)),
+    }))
+    .filter((i) => i.name);
+
+  // Dedup untuk hasil AI yang kadang mengulang barang yang sama.
+  // Jika sama persis (nama+qty+unit), ambil nominal yang lebih kecil agar tidak overcount.
+  const byKey = new Map();
+  for (const item of cleaned) {
+    const key = `${normItemText(item.name)}|${item.qty}|${normItemText(item.unit)}`;
+    const prev = byKey.get(key);
+    if (!prev) {
+      byKey.set(key, item);
+      continue;
+    }
+    const prevSubtotal = (Number(prev.qty) || 0) * (Number(prev.unitPrice) || 0);
+    const curSubtotal = (Number(item.qty) || 0) * (Number(item.unitPrice) || 0);
+    if (curSubtotal > 0 && (prevSubtotal <= 0 || curSubtotal < prevSubtotal)) {
+      byKey.set(key, item);
+    }
+  }
+  const deduped = [...byKey.values()];
+
+  const targetAmount = Math.round(Number(amount) || 0);
+  const totalNow = calcItemsTotal(deduped);
+  if (!(targetAmount > 0) || totalNow <= Math.round(targetAmount * 1.15)) {
+    return deduped;
+  }
+
+  // Guard kasus "6 pcs total 30rb" yang kebaca jadi unitPrice 30rb.
+  const normalized = deduped.map((i) => {
+    const qty = Number(i.qty) || 0;
+    const unitPrice = Number(i.unitPrice) || 0;
+    if (qty > 1 && unitPrice > 0) {
+      return { ...i, unitPrice: Math.max(1, Math.round(unitPrice / qty)) };
+    }
+    return i;
+  });
+  const normalizedTotal = calcItemsTotal(normalized);
+  if (normalizedTotal > 0 && normalizedTotal < totalNow && normalizedTotal <= Math.round(targetAmount * 1.15)) {
+    return normalized;
+  }
+  return deduped;
 }
 
 /** Total yang dipakai simpan: dari item jika ada harga baris, else input manual. */
@@ -126,6 +181,7 @@ function StepForm({ s, draft, setDraft, onNext, onClose }) {
   );
   const myWallets = visibleWallets(s.wallets, s.currentUser);
   const cats      = visibleCategories(categories, s.currentUser, "out");
+  const outletOptions = useMemo(() => purchasingOutletOptions(s.currentUser), [s.currentUser]);
   const setupBlocked = cats.length === 0 || myWallets.length === 0;
 
   const fileRef   = useRef(null);
@@ -145,14 +201,11 @@ function StepForm({ s, draft, setDraft, onNext, onClose }) {
     try {
       const r = await aiParse({ mode: "purchasing", text: trimmed, categories: cats });
       const cat = cats.find(c => c.name.toLowerCase() === (r.category || "").toLowerCase()) || cats[0];
-      const parsedItems = (r.items || [])
-        .filter(i => i?.name)
-        .map(i => ({
-          name: String(i.name).trim(),
-          qty: i.qty ?? "",
-          unit: i.unit || "pcs",
-          unitPrice: i.unitPrice ?? "",
-        }));
+      const parsedItems = sanitizeParsedItems(r.items || [], r.amount).map((i) => ({
+        ...i,
+        qty: i.qty || "",
+        unitPrice: i.unitPrice || "",
+      }));
       const itemsTotal = parsedItems.reduce(
         (s, i) => s + (Number(i.qty) || 0) * (Number(i.unitPrice) || 0),
         0
@@ -321,11 +374,11 @@ function StepForm({ s, draft, setDraft, onNext, onClose }) {
             )}
           </div>
 
-          {/* Outlet */}
+          {/* Lokasi pembelian */}
           <div style={styles.fieldGroup}>
-            <label style={styles.label}>Outlet <span style={{ color: "#e24b4a" }}>*</span></label>
+            <label style={styles.label}>Lokasi pembelian <span style={{ color: "#e24b4a" }}>*</span></label>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-              {PURCHASING_OUTLETS.map(o => (
+              {outletOptions.map(o => (
                 <button
                   key={o.code}
                   style={{ ...styles.pill, ...(draft.outlet === o.code ? styles.pillActiveBlue : {}) }}
@@ -601,11 +654,11 @@ function StepReview({ s, draft, onSave, onBack, onClose, onNew }) {
             <div style={styles.successIcon}>✓</div>
             <div style={{ fontSize: 16, fontWeight: 500, marginBottom: 6 }}>Transaksi tersimpan</div>
             <div style={{ fontSize: 13, color: "#888", marginBottom: 24 }}>
-              {formatRupiah(displayAmount)} dicatat untuk {outletLabel}
+              {formatRupiah(displayAmount)} dicatat untuk lokasi {outletLabel}
             </div>
             <div style={{ ...styles.card, textAlign: "left", marginBottom: 16 }}>
               <div style={{ fontSize: 11, color: "#aaa", marginBottom: 8, fontWeight: 500 }}>Ringkasan</div>
-              <Row label="Outlet"   val={outletLabel} />
+              <Row label="Lokasi pembelian"   val={outletLabel} />
               <Row label="Kategori" val={catName} />
               <Row label="Dari"     val={draft.supplier} />
               <Row label="Dompet"   val={wallet?.name || "—"} />
@@ -649,7 +702,7 @@ function StepReview({ s, draft, onSave, onBack, onClose, onNew }) {
           {/* Info transaksi */}
           <div style={{ ...styles.card, marginBottom: 10 }}>
             <div style={styles.sectionTitle}>Info transaksi</div>
-            <Row label="Outlet"       val={<Badge color="blue">{outletLabel}</Badge>} />
+            <Row label="Lokasi pembelian" val={<Badge color="blue">{outletLabel}</Badge>} />
             <Row label="Kategori"     val={<Badge color="amber">{catName}</Badge>} />
             <Row label="Beli dari"    val={draft.supplier} />
             <Row label="Dompet"       val={wallet?.name || "—"} />
@@ -777,23 +830,24 @@ export default function PurchasingForm({ s, onSave, onClose }) {
   );
   const myWallets = visibleWallets(s.wallets, s.currentUser);
   const cats = visibleCategories(categories, s.currentUser, "out");
+  const outletOptions = useMemo(() => purchasingOutletOptions(s.currentUser), [s.currentUser]);
 
   useEffect(() => {
     setDraft((d) => ({
       ...d,
       walletId: d.walletId || myWallets[0]?.id || "",
       categoryId: d.categoryId || cats[0]?.id || "",
-      outlet: d.outlet || PURCHASING_OUTLETS[0]?.code || "",
+      outlet: d.outlet || outletOptions[0]?.code || PURCHASING_OUTLETS[0]?.code || "",
       date: d.date || todayLocal(),
     }));
-  }, [myWallets, cats]);
+  }, [myWallets, cats, outletOptions]);
 
   const resetDraft = () => {
     setDraft({
       ...EMPTY_DRAFT,
       walletId: myWallets[0]?.id || "",
       categoryId: cats[0]?.id || "",
-      outlet: PURCHASING_OUTLETS[0]?.code || "",
+      outlet: outletOptions[0]?.code || PURCHASING_OUTLETS[0]?.code || "",
       date: todayLocal(),
     });
     setStep(1);

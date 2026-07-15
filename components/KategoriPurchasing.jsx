@@ -1,113 +1,65 @@
-// ============================================================
-// components/KategoriPurchasing.jsx
-// Kelola kategori purchasing — overlay di NF3App
-// Hanya owner/admin yang bisa akses
-// ============================================================
-// Integrasi di NF3App.jsx:
-//
-// 1. Import:
-//    import KategoriPurchasing from "../../../components/KategoriPurchasing";
-//
-// 2. Tambah menu di PengaturanScreen (dekat Kelola Kategori):
-//    {canDo(role, "kelolaKategoriSemua") && (
-//      <SRow icon={ShoppingBag} label="Kategori Purchasing"
-//        sub="Kelola kategori belanja purchasing"
-//        onClick={() => setOverlay("kategoriPurchasing")} chev />
-//    )}
-//
-// 3. Tambah overlay renderer:
-//    {overlay === "kategoriPurchasing" && canDo(user.role, "kelolaKategoriSemua") && (
-//      <KategoriPurchasing s={view} mutate={mutate} onClose={() => setOverlay(null)} />
-//    )}
-// ============================================================
+// Kelola 13 kategori purchasing resmi — icon, warna, sembunyikan/tampilkan.
+// Dirender di dalam Sheet NF3App (z-index sama overlay lain).
 
 "use client";
 
 import { useState } from "react";
+import { Pencil, Eye, EyeOff, Trash2, Check, X } from "lucide-react";
 import { canDo } from "../lib/rbac";
 import { PURCHASING_FINAL_NAMES } from "../lib/purchasingCategories";
+import { applyRemoveCategory } from "../lib/categoryManage.js";
 
-// ------------------------------------------------------------
-// Warna pilihan
-// ------------------------------------------------------------
 const COLOR_OPTIONS = [
-  { hex: "#1D9E75", label: "Hijau tua" },
-  { hex: "#0F6E56", label: "Hijau gelap" },
-  { hex: "#378ADD", label: "Biru" },
-  { hex: "#7F77DD", label: "Ungu" },
-  { hex: "#D85A30", label: "Oranye" },
-  { hex: "#BA7517", label: "Amber" },
-  { hex: "#993C1D", label: "Coklat" },
-  { hex: "#E24B4A", label: "Merah" },
-  { hex: "#5F5E5A", label: "Abu" },
-  { hex: "#888780", label: "Abu muda" },
+  "#1D9E75", "#0F6E56", "#378ADD", "#7F77DD", "#D85A30",
+  "#BA7517", "#993C1D", "#E24B4A", "#5F5E5A", "#888780",
 ];
 
-// Icon pilihan (Tabler icon names)
 const ICON_OPTIONS = [
   "shopping-bag", "basket", "flame", "box", "bolt",
   "truck", "tools-kitchen-2", "building", "users",
   "settings", "dots", "cash", "receipt", "package",
-  "salad", "meat", "fish", "bottle", "droplet",
 ];
 
-// ------------------------------------------------------------
-// Form tambah / edit kategori
-// ------------------------------------------------------------
 function CatForm({ initial, onSave, onCancel }) {
-  const [name,  setName]  = useState(initial?.name  || "");
-  const [icon,  setIcon]  = useState(initial?.icon  || "shopping-bag");
+  const [icon, setIcon] = useState(initial?.icon || "shopping-bag");
   const [color, setColor] = useState(initial?.color || "#1D9E75");
-
-  const canSubmit = name.trim() !== "";
+  const [description, setDescription] = useState(initial?.description || "");
 
   return (
-    <div style={styles.formCard}>
-      {/* Nama */}
-      <div style={styles.fieldGroup}>
-        <label style={styles.label}>Nama kategori <span style={{ color: "#e24b4a" }}>*</span></label>
-        <input
-          style={styles.inp}
-          placeholder="Misal: Bumbu & Rempah"
-          value={name}
-          onChange={e => setName(e.target.value)}
-          autoFocus
-        />
-      </div>
+    <div style={{ background: "var(--surface2)", borderRadius: 14, border: "1px solid var(--line)", padding: 14, marginBottom: 14 }}>
+      <div style={{ fontSize: 14, fontWeight: 700, color: "var(--ink)", marginBottom: 12 }}>{initial?.name}</div>
 
-      {/* Warna */}
-      <div style={styles.fieldGroup}>
-        <label style={styles.label}>Warna</label>
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--ink3)", marginBottom: 6 }}>Warna</div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          {COLOR_OPTIONS.map(c => (
+          {COLOR_OPTIONS.map((hex) => (
             <button
-              key={c.hex}
-              title={c.label}
-              onClick={() => setColor(c.hex)}
+              key={hex}
+              type="button"
+              onClick={() => setColor(hex)}
               style={{
-                width: 28, height: 28, borderRadius: "50%",
-                background: c.hex, border: "none", cursor: "pointer",
-                outline: color === c.hex ? `3px solid ${c.hex}` : "none",
-                outlineOffset: 2,
+                width: 28, height: 28, borderRadius: "50%", background: hex, border: "none", cursor: "pointer",
+                outline: color === hex ? `3px solid ${hex}` : "none", outlineOffset: 2,
               }}
             />
           ))}
         </div>
       </div>
 
-      {/* Icon */}
-      <div style={styles.fieldGroup}>
-        <label style={styles.label}>Icon</label>
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--ink3)", marginBottom: 6 }}>Icon</div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-          {ICON_OPTIONS.map(ic => (
+          {ICON_OPTIONS.map((ic) => (
             <button
               key={ic}
+              type="button"
               onClick={() => setIcon(ic)}
               style={{
-                ...styles.iconPill,
-                background: icon === ic ? color : "var(--color-background-secondary, #f9f9f9)",
-                borderColor: icon === ic ? color : "#e0e0e0",
-                color: icon === ic ? "#fff" : "#888",
+                width: 36, height: 36, borderRadius: 8, cursor: "pointer",
+                border: `1px solid ${icon === ic ? color : "var(--line)"}`,
+                background: icon === ic ? color : "var(--surface)",
+                color: icon === ic ? "#fff" : "var(--ink3)",
+                display: "grid", placeItems: "center",
               }}
             >
               <i className={`ti ti-${ic}`} style={{ fontSize: 16 }} aria-hidden="true" />
@@ -116,25 +68,27 @@ function CatForm({ initial, onSave, onCancel }) {
         </div>
       </div>
 
-      {/* Preview */}
-      <div style={styles.fieldGroup}>
-        <label style={styles.label}>Preview</label>
-        <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 12px", borderRadius: 20, background: color + "22", border: `0.5px solid ${color}` }}>
-          <i className={`ti ti-${icon}`} style={{ fontSize: 15, color }} aria-hidden="true" />
-          <span style={{ fontSize: 13, fontWeight: 500, color }}>{name || "Nama kategori"}</span>
-        </div>
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--ink3)", marginBottom: 6 }}>Panduan staf</div>
+        <textarea
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          rows={2}
+          placeholder="Contoh: ayam, beras, sayur…"
+          style={{
+            width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid var(--line)",
+            background: "var(--surface)", fontSize: 13, color: "var(--ink)", resize: "vertical", fontFamily: "inherit",
+          }}
+        />
       </div>
 
-      {/* Aksi */}
-      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-        <button
-          style={{ ...styles.btnPrimary, flex: 1, opacity: canSubmit ? 1 : 0.4 }}
-          disabled={!canSubmit}
-          onClick={() => onSave({ name: name.trim(), icon, color })}
-        >
-          {initial ? "Simpan perubahan" : "Tambah kategori"}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        <button type="button" onClick={() => onSave({ icon, color, description: description.trim() })}
+          style={{ padding: 12, borderRadius: 12, border: "none", background: "var(--brand)", color: "#fff", fontWeight: 700, cursor: "pointer" }}>
+          Simpan
         </button>
-        <button style={{ ...styles.btnSecondary, flex: 1 }} onClick={onCancel}>
+        <button type="button" onClick={onCancel}
+          style={{ padding: 12, borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface)", color: "var(--ink)", fontWeight: 600, cursor: "pointer" }}>
           Batal
         </button>
       </div>
@@ -142,274 +96,127 @@ function CatForm({ initial, onSave, onCancel }) {
   );
 }
 
-// ------------------------------------------------------------
-// Baris kategori
-// ------------------------------------------------------------
 function CatRow({ cat, onEdit, onToggle, onDelete }) {
   const [confirmDel, setConfirmDel] = useState(false);
 
   return (
-    <div style={{ ...styles.catRow, opacity: cat.active === false ? 0.45 : 1 }}>
-      {/* Icon + nama */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1 }}>
-        <div style={{ width: 34, height: 34, borderRadius: 8, background: (cat.color || "#888") + "22", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-          <i className={`ti ti-${cat.icon || "dots"}`} style={{ fontSize: 17, color: cat.color || "#888" }} aria-hidden="true" />
-        </div>
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 500 }}>{cat.name}</div>
-          {cat.active === false && (
-            <div style={{ fontSize: 11, color: "#aaa" }}>Nonaktif</div>
-          )}
-        </div>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 0", borderBottom: "1px solid var(--line)", opacity: cat.active === false ? 0.5 : 1 }}>
+      <div style={{ width: 36, height: 36, borderRadius: 10, background: `${cat.color || "#888"}22`, display: "grid", placeItems: "center", flexShrink: 0 }}>
+        <i className={`ti ti-${cat.icon || "dots"}`} style={{ fontSize: 17, color: cat.color || "#888" }} aria-hidden="true" />
       </div>
-
-      {/* Aksi */}
-      {confirmDel
-        ? (
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <span style={{ fontSize: 11, color: "#e24b4a" }}>Hapus?</span>
-            <button style={styles.actionBtn} onClick={() => onDelete(cat.id)}>Ya</button>
-            <button style={styles.actionBtn} onClick={() => setConfirmDel(false)}>Tidak</button>
-          </div>
-        )
-        : (
-          <div style={{ display: "flex", gap: 4 }}>
-            <button style={styles.actionBtn} onClick={() => onEdit(cat)} title="Edit">
-              <i className="ti ti-edit" style={{ fontSize: 15 }} aria-hidden="true" />
-            </button>
-            <button
-              style={{ ...styles.actionBtn, color: cat.active === false ? "#1D9E75" : "#888" }}
-              onClick={() => onToggle(cat.id)}
-              title={cat.active === false ? "Aktifkan" : "Nonaktifkan"}
-            >
-              <i className={`ti ti-${cat.active === false ? "eye" : "eye-off"}`} style={{ fontSize: 15 }} aria-hidden="true" />
-            </button>
-            <button
-              style={{ ...styles.actionBtn, color: "#e24b4a" }}
-              onClick={() => setConfirmDel(true)}
-              title="Hapus"
-            >
-              <i className="ti ti-trash" style={{ fontSize: 15 }} aria-hidden="true" />
-            </button>
-          </div>
-        )
-      }
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: "var(--ink)" }}>{cat.name}</div>
+        {cat.active === false && <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: 2 }}>Disembunyikan dari purchasing</div>}
+        {cat.description && <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: 2, lineHeight: 1.35 }}>{cat.description}</div>}
+      </div>
+      {confirmDel ? (
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+          <span style={{ fontSize: 11, color: "var(--out-text)", fontWeight: 600 }}>Sembunyikan?</span>
+          <button type="button" onClick={() => { onDelete(cat.id); setConfirmDel(false); }} style={actionBtn}><Check size={14} color="var(--out)" /></button>
+          <button type="button" onClick={() => setConfirmDel(false)} style={actionBtn}><X size={14} /></button>
+        </div>
+      ) : (
+        <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+          <button type="button" onClick={() => onEdit(cat)} title="Edit icon & warna" style={actionBtn}><Pencil size={14} /></button>
+          <button type="button" onClick={() => onToggle(cat.id)} title={cat.active === false ? "Tampilkan" : "Sembunyikan"} style={actionBtn}>
+            {cat.active === false ? <Eye size={14} color="var(--in)" /> : <EyeOff size={14} />}
+          </button>
+          <button type="button" onClick={() => setConfirmDel(true)} title="Sembunyikan / hapus" style={actionBtn}><Trash2 size={14} color="var(--out)" /></button>
+        </div>
+      )}
     </div>
   );
 }
 
-// ------------------------------------------------------------
-// KOMPONEN UTAMA
-// ------------------------------------------------------------
-export default function KategoriPurchasing({ s, mutate, onClose }) {
+const actionBtn = {
+  width: 32, height: 32, borderRadius: 8, border: "1px solid var(--line)",
+  background: "var(--surface)", cursor: "pointer", display: "grid", placeItems: "center", color: "var(--ink3)",
+};
+
+export default function KategoriPurchasing({ s, mutate }) {
   const role = s.currentUser?.role || "kasir";
 
-  // Guard — hanya owner/admin
   if (!canDo(role, "kelolaKategoriSemua")) {
     return (
-      <div style={styles.overlay}>
-        <div style={styles.sheet}>
-          <div style={{ padding: 40, textAlign: "center", color: "#888" }}>
-            Hanya owner/admin yang bisa mengakses halaman ini.
-          </div>
-        </div>
+      <div style={{ padding: 32, textAlign: "center", color: "var(--ink3)", fontSize: 14 }}>
+        Hanya owner/admin yang bisa mengakses halaman ini.
       </div>
     );
   }
 
-  // Ambil kategori purchasing dari app_state
-  const cats = (s.categories || []).filter(c =>
-    c.type === "out" && c.role === "purchasing"
-    && PURCHASING_FINAL_NAMES.has((c.name || "").trim().toLowerCase())
-  ).sort((a, b) => (a.sort || 0) - (b.sort || 0));
+  const cats = (s.categories || [])
+    .filter((c) => c.type === "out" && c.role === "purchasing" && PURCHASING_FINAL_NAMES.has((c.name || "").trim().toLowerCase()))
+    .sort((a, b) => (a.sort || 0) - (b.sort || 0));
 
-  const [showForm, setShowForm] = useState(false);
-  const [editCat,  setEditCat]  = useState(null); // null = tambah baru, object = edit
-
-  // ------------------------------------------------------------
-  // CRUD — semua lewat mutate → app_state (pola CatScreen NF3)
-  // ------------------------------------------------------------
-  function handleAdd(fields) {
-    mutate(d => {
-      const maxSort = Math.max(0, ...d.categories.filter(c => c.role === "purchasing").map(c => c.sort || 0));
-      d.categories.push({
-        id:     "c" + Date.now(),
-        type:   "out",
-        role:   "purchasing",
-        active: true,
-        sort:   maxSort + 1,
-        ...fields,
-      });
-    });
-    setShowForm(false);
-  }
+  const [editCat, setEditCat] = useState(null);
+  const [msg, setMsg] = useState("");
 
   function handleEdit(fields) {
-    mutate(d => {
-      const idx = d.categories.findIndex(c => c.id === editCat.id);
+    mutate((d) => {
+      const idx = d.categories.findIndex((c) => c.id === editCat.id);
       if (idx >= 0) d.categories[idx] = { ...d.categories[idx], ...fields };
     });
     setEditCat(null);
+    setMsg("Perubahan disimpan — menyinkron ke awan…");
   }
 
   function handleToggle(id) {
-    mutate(d => {
-      const c = d.categories.find(x => x.id === id);
+    mutate((d) => {
+      const c = d.categories.find((x) => x.id === id);
       if (c) c.active = c.active === false ? true : false;
     });
+    setMsg("");
   }
 
   function handleDelete(id) {
-    mutate(d => {
-      d.categories = d.categories.filter(c => c.id !== id);
+    let plan;
+    mutate((d) => {
+      plan = applyRemoveCategory(d, id);
     });
+    setMsg(
+      plan?.mode === "hidden"
+        ? `"${plan.name}" disembunyikan — transaksi lama tetap aman.`
+        : plan?.ok
+          ? `"${plan.name}" dihapus.`
+          : ""
+    );
   }
 
   return (
-    <div style={styles.overlay}>
-      <div style={styles.sheet}>
-
-        {/* Header */}
-        <div style={styles.header}>
-          <button style={styles.iconBtn} onClick={onClose} aria-label="Tutup">
-            <i className="ti ti-arrow-left" aria-hidden="true" />
-          </button>
-          <span style={styles.headerTitle}>Kategori purchasing</span>
-          <div style={{ width: 32 }} />
-        </div>
-
-        <div style={styles.body}>
-
-          {/* Form tambah / edit */}
-          {(showForm || editCat) && (
-            <CatForm
-              initial={editCat}
-              onSave={editCat ? handleEdit : handleAdd}
-              onCancel={() => { setShowForm(false); setEditCat(null); }}
-            />
-          )}
-
-          {/* Info */}
-          {!showForm && !editCat && (
-            <div style={styles.infoBox}>
-              <i className="ti ti-info-circle" style={{ fontSize: 14, flexShrink: 0 }} aria-hidden="true" />
-              <span style={{ fontSize: 12, lineHeight: 1.5 }}>
-                Hanya 13 kelompok akuntansi resmi (Bahan Baku, Kemasan, dll.). Nama barang seperti &quot;ayam pentung&quot; dicatat di <b>detail item</b> transaksi, bukan di sini.
-              </span>
-            </div>
-          )}
-
-          {/* Daftar kategori */}
-          {cats.length === 0 && !showForm && (
-            <div style={{ textAlign: "center", padding: "32px 0", color: "#bbb" }}>
-              <i className="ti ti-tag-off" style={{ fontSize: 32, display: "block", marginBottom: 8 }} aria-hidden="true" />
-              <div style={{ fontSize: 13 }}>Kelompok belanja belum dimuat — refresh app atau hubungi admin.</div>
-            </div>
-          )}
-
-          {cats.map(cat => (
-            <CatRow
-              key={cat.id}
-              cat={cat}
-              onEdit={c => { setEditCat(c); setShowForm(false); }}
-              onToggle={handleToggle}
-              onDelete={handleDelete}
-            />
-          ))}
-
-          {/* Tombol tambah di bawah kalau sudah ada kategori */}
-          {cats.length > 0 && !showForm && !editCat && (
-            <button
-              style={styles.addBtn}
-              onClick={() => { setEditCat(null); setShowForm(true); }}
-            >
-              <i className="ti ti-plus" aria-hidden="true" /> Tambah kategori
-            </button>
-          )}
-
-        </div>
+    <div style={{ padding: "16px 16px 40px" }}>
+      <div style={{ fontSize: 12, color: "var(--ink2)", marginBottom: 14, padding: "12px 14px", background: "var(--brand-soft)", borderRadius: 12, lineHeight: 1.5 }}>
+        13 kelompok belanja resmi untuk purchasing. Untuk <b>tambah/hapus kategori umum</b> pakai <b>Kelola Kategori</b> atau <b>Atur kategori</b> di Catat Transaksi.
       </div>
+
+      {msg && (
+        <div style={{ marginBottom: 12, padding: "10px 12px", borderRadius: 10, background: "var(--in-soft)", color: "var(--in-text)", fontSize: 12 }}>
+          {msg}
+        </div>
+      )}
+
+      {editCat && (
+        <CatForm
+          initial={editCat}
+          onSave={handleEdit}
+          onCancel={() => setEditCat(null)}
+        />
+      )}
+
+      {cats.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "32px 0", color: "var(--ink3)", fontSize: 13 }}>
+          Kategori belum dimuat — tarik refresh atau buka ulang app setelah sync.
+        </div>
+      ) : (
+        cats.map((cat) => (
+          <CatRow
+            key={cat.id}
+            cat={cat}
+            onEdit={(c) => { setEditCat(c); setMsg(""); }}
+            onToggle={handleToggle}
+            onDelete={handleDelete}
+          />
+        ))
+      )}
     </div>
   );
 }
-
-// ------------------------------------------------------------
-// STYLES
-// ------------------------------------------------------------
-const styles = {
-  overlay: {
-    position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)",
-    display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 999,
-  },
-  sheet: {
-    background: "#fff", borderRadius: "16px 16px 0 0",
-    width: "100%", maxWidth: 480, maxHeight: "88vh",
-    display: "flex", flexDirection: "column",
-  },
-  header: {
-    display: "flex", alignItems: "center", gap: 10,
-    padding: "14px 16px", borderBottom: "0.5px solid #f0f0f0", flexShrink: 0,
-  },
-  headerTitle: { flex: 1, fontSize: 15, fontWeight: 500 },
-  iconBtn: {
-    width: 32, height: 32, borderRadius: 8,
-    border: "0.5px solid #e0e0e0", background: "#f9f9f9",
-    fontSize: 16, cursor: "pointer",
-    display: "flex", alignItems: "center", justifyContent: "center",
-  },
-  body: { overflowY: "auto", padding: "12px 16px 24px", flex: 1 },
-  infoBox: {
-    display: "flex", alignItems: "flex-start", gap: 8,
-    background: "#E6F1FB", border: "0.5px solid #85B7EB",
-    borderRadius: 8, padding: "10px 12px",
-    color: "#0C447C", marginBottom: 12,
-  },
-  formCard: {
-    background: "#f9f9f9", borderRadius: 12,
-    border: "0.5px solid #e0e0e0", padding: 14, marginBottom: 14,
-  },
-  fieldGroup: { marginBottom: 12 },
-  label: { fontSize: 11, fontWeight: 500, color: "#888", display: "block", marginBottom: 5 },
-  inp: {
-    width: "100%", padding: "8px 10px", borderRadius: 8,
-    border: "0.5px solid #e0e0e0", background: "#fff",
-    fontSize: 13, color: "#1a1a1a", fontFamily: "inherit",
-    outline: "none", boxSizing: "border-box",
-  },
-  iconPill: {
-    width: 36, height: 36, borderRadius: 8,
-    border: "0.5px solid #e0e0e0", cursor: "pointer",
-    display: "flex", alignItems: "center", justifyContent: "center",
-  },
-  catRow: {
-    display: "flex", alignItems: "center", gap: 10,
-    padding: "10px 0", borderBottom: "0.5px solid #f5f5f5",
-  },
-  actionBtn: {
-    width: 30, height: 30, borderRadius: 6,
-    border: "0.5px solid #e0e0e0", background: "#f9f9f9",
-    cursor: "pointer", display: "flex", alignItems: "center",
-    justifyContent: "center", color: "#888", fontSize: 13,
-  },
-  addBtn: {
-    width: "100%", padding: 10, marginTop: 12,
-    borderRadius: 8, border: "0.5px dashed #ccc",
-    background: "transparent", fontSize: 13, color: "#888",
-    cursor: "pointer", display: "flex",
-    alignItems: "center", justifyContent: "center", gap: 6,
-  },
-  btnPrimary: {
-    width: "100%", padding: 11, borderRadius: 8,
-    background: "#185FA5", border: "none",
-    color: "#fff", fontSize: 13, fontWeight: 500,
-    cursor: "pointer", fontFamily: "inherit",
-    display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-  },
-  btnSecondary: {
-    width: "100%", padding: 11, borderRadius: 8,
-    background: "transparent", border: "0.5px solid #ddd",
-    color: "#333", fontSize: 13, fontWeight: 500,
-    cursor: "pointer", fontFamily: "inherit",
-    display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-  },
-};

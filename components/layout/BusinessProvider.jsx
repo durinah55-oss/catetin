@@ -12,7 +12,7 @@ import {
 } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
-import { subscribeAuth } from "../../lib/authBootstrap";
+import { subscribeAuth, readStoredSession } from "../../lib/authBootstrap";
 import { withTimeout, resetSupabaseSessionCache } from "../../lib/supabaseSession";
 import { resolveAuthMembership } from "../../lib/membershipResolve";
 import * as repo from "../../lib/repo";
@@ -60,6 +60,28 @@ export default function BusinessProvider({ children }) {
     }, 1500);
     return () => { clearTimeout(t); unsub(); };
   }, []);
+
+  // HP/PWA kadang telat memulihkan sesi saat app kembali aktif.
+  // Jika token lokal masih ada, pulihkan sesi lokal agar tidak lempar ke login terlalu cepat.
+  useEffect(() => {
+    if (!authReady || session) return;
+    const stored = readStoredSession();
+    if (stored?.user) {
+      setSession(stored);
+      return;
+    }
+    const revive = () => {
+      if (session) return;
+      const latest = readStoredSession();
+      if (latest?.user) setSession(latest);
+    };
+    window.addEventListener("focus", revive);
+    document.addEventListener("visibilitychange", revive);
+    return () => {
+      window.removeEventListener("focus", revive);
+      document.removeEventListener("visibilitychange", revive);
+    };
+  }, [authReady, session]);
 
   // ── 2. Muat bisnis + profil user saat login ───────────────────────────────
   useEffect(() => {
@@ -207,6 +229,8 @@ export default function BusinessProvider({ children }) {
       return;
     }
     if (!session && !isPublic(pathname)) {
+      const stored = readStoredSession();
+      if (stored?.user) return;
       router.replace("/login");
       return;
     }

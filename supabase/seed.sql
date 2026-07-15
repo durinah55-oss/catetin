@@ -68,10 +68,17 @@ begin
     insert into public.business_members (business_id, user_id, role)
     values (v_fishing, v_owner, 'owner');
 
+    -- Dompet milik Fishing sendiri (rekening Rudi/Durinah, marketplace, reseller).
+    -- Catatan: rekening Sam yang ter-mirror dari FNB disimpan sebagai sharedLinks di
+    -- app_state (JSONB), bukan di tabel relational ini — lihat createFishingWalletSetup().
     insert into public.wallets (business_id, name, type, icon, color, opening_balance, sort) values
-      (v_fishing, 'Kas',             'cash',    '💵', '#16A34A', 300000,   0),
-      (v_fishing, 'Bank Mandiri',    'bank',    '🏦', '#2563EB', 12000000, 1),
-      (v_fishing, 'Saldo Marketplace','ewallet','📱', '#F97316', 1800000,  2);
+      (v_fishing, 'Marketplace',          'ewallet', '📱', '#F97316', 0, 10),
+      (v_fishing, 'Reseller',             'bank',    '🤝', '#0EA5E9', 0, 20),
+      (v_fishing, 'Bank Mandiri Durinah', 'bank',    '🏦', '#CA8A04', 0, 30),
+      (v_fishing, 'Bank BCA Rudi',        'bank',    '🏦', '#1D4ED8', 0, 40),
+      (v_fishing, 'Bank BNI Rudi',        'bank',    '🏦', '#1E40AF', 0, 50),
+      (v_fishing, 'Bank Mandiri Rudi',    'bank',    '🏦', '#A16207', 0, 60),
+      (v_fishing, 'Bank BRI Rudi',        'bank',    '🏦', '#DC2626', 0, 70);
 
     insert into public.categories (business_id, name, type, sort) values
       (v_fishing, 'Penjualan',      'in', 0),

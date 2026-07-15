@@ -17,7 +17,7 @@ export default function ActionToast() {
     return subscribeActionToast((t) => {
       clearTimeout(timer);
       setToast(t);
-      timer = setTimeout(() => setToast(null), 3200);
+      timer = setTimeout(() => setToast(null), t.durationMs ?? 3200);
     });
   }, []);
 

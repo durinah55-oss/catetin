@@ -32,6 +32,8 @@ import {
 import { formatRupiah, PURCHASING_OUTLETS, purchasingOutletLabel } from "../lib/purchasingExpense";
 import { purchasingTxTitle, purchasingTxSubtitle } from "../lib/purchasingItems";
 import { formatPurchasingWa, openWhatsAppShare } from "../lib/shareWa";
+import { walletBalanceAtDate } from "../lib/purchasingKasKecil.js";
+import { visibleWallets } from "../lib/rbac";
 
 // ------------------------------------------------------------
 // Helper
@@ -50,6 +52,34 @@ function isPurchasingTx(t) {
     t.module === "purchasing" ||
     t.source?.startsWith("purchasing")
   );
+}
+
+function isTransferIntoWallet(t, walletId) {
+  if (!t || t.type !== "transfer") return false;
+  return (t.toWalletId || t.to_wallet_id) === walletId;
+}
+
+function isRefundIntoWallet(t, walletId) {
+  if (!t || t.type !== "in") return false;
+  const wId = t.walletId || t.wallet_id;
+  if (wId !== walletId) return false;
+  const blob = `${t.desc || ""} ${(t.source || "")}`.toLowerCase();
+  return /refund|retur|pengembalian/.test(blob);
+}
+
+function isAreaWalletName(wallet, area) {
+  if (!wallet || !area) return false;
+  if (wallet.type === "rekening") return false;
+  const areaText = String(area).toLowerCase();
+  const idText = String(wallet.id || "").toLowerCase().replace(/^w_/, "").replace(/_/g, " ");
+  const nameText = String(wallet.name || "").toLowerCase();
+  return nameText.includes(areaText) || idText.includes(areaText);
+}
+
+function hasUserAssignedWallet(wallet, user) {
+  const uid = user?.id;
+  if (!uid) return false;
+  return Array.isArray(wallet?.allowedUserIds) && wallet.allowedUserIds.includes(uid);
 }
 
 // Periode preset — "1 hari" = hari ini (untuk ringkas WA)
@@ -237,11 +267,30 @@ function TxRow({ tx, catMap, walletMap }) {
 // ------------------------------------------------------------
 export default function LaporanPurchasing({ s, onClose }) {
   const user = s.currentUser || { role: "purchasing" };
+  const myWallets = useMemo(() => visibleWallets(s.wallets || [], user), [s.wallets, user]);
+  const allowedWalletIds = useMemo(() => new Set((myWallets || []).map((w) => w.id)), [myWallets]);
+  const assignedWalletIds = useMemo(() => {
+    const ids = (myWallets || []).filter((w) => hasUserAssignedWallet(w, user)).map((w) => w.id);
+    return new Set(ids);
+  }, [myWallets, user]);
+  const hasExplicitWalletAssignment = assignedWalletIds.size > 0;
+  const purchasingArea = user.role === "purchasing" && user.outlet && !["KBU", "KSM", "SMT"].includes(String(user.outlet).toUpperCase())
+    ? String(user.outlet)
+    : "";
+  const areaWalletIds = useMemo(() => {
+    if (hasExplicitWalletAssignment) return assignedWalletIds;
+    if (!purchasingArea) return null;
+    const ids = (myWallets || []).filter((w) => isAreaWalletName(w, purchasingArea)).map((w) => w.id);
+    return new Set(ids);
+  }, [hasExplicitWalletAssignment, assignedWalletIds, myWallets, purchasingArea]);
   const [preset,      setPreset]      = useState("1 hari");
   const [anchorDate,  setAnchorDate]  = useState(today());
   const [customStart, setCustomStart] = useState(isoOffset(-7));
   const [customEnd,   setCustomEnd]   = useState(today());
   const [outletFilter,setOutletFilter]= useState("Semua");
+  const [walletFilter,setWalletFilter]= useState("all");
+  const [creatorFilter,setCreatorFilter]= useState("all");
+  const [verifiedFilter,setVerifiedFilter]= useState("all");
   const [exporting,   setExporting]   = useState(null); // "csv" | "pdf" | null
 
   const bounds = useMemo(
@@ -251,17 +300,26 @@ export default function LaporanPurchasing({ s, onClose }) {
 
   // Filter transaksi purchasing
   const baseTx = useMemo(
-    () => (s.transactions || []).filter(isPurchasingTx),
-    [s.transactions]
+    () => (s.transactions || []).filter((t) => {
+      if (!isPurchasingTx(t)) return false;
+      const wid = t.walletId || t.wallet_id;
+      if (!allowedWalletIds.has(wid)) return false;
+      if (areaWalletIds && !areaWalletIds.has(wid)) return false;
+      return true;
+    }),
+    [s.transactions, allowedWalletIds, areaWalletIds]
   );
 
   const filteredTx = useMemo(() => {
     let tx = filterTransactions(baseTx, {
-      start: bounds.start, end: bounds.end, walletId: "all",
+      start: bounds.start, end: bounds.end, walletId: walletFilter,
     });
     if (outletFilter !== "Semua") tx = tx.filter(t => t.outlet === outletFilter);
+    if (creatorFilter !== "all") tx = tx.filter(t => t.meta?.createdById === creatorFilter || t.createdBy === creatorFilter);
+    if (verifiedFilter === "verified") tx = tx.filter(t => t.meta?.verified === true);
+    if (verifiedFilter === "unverified") tx = tx.filter(t => t.meta?.verified !== true);
     return tx.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-  }, [baseTx, bounds, outletFilter]);
+  }, [baseTx, bounds, outletFilter, walletFilter, creatorFilter, verifiedFilter]);
 
   // Ringkasan
   const totalAmount  = filteredTx.reduce((s, t) => s + (t.amount || 0), 0);
@@ -270,7 +328,23 @@ export default function LaporanPurchasing({ s, onClose }) {
 
   // Terbesar per kategori
   const catMap    = Object.fromEntries((s.categories || []).map(c => [c.id, c.name]));
-  const walletMap = Object.fromEntries((s.wallets    || []).map(w => [w.id, w.name]));
+  const walletMap = Object.fromEntries((myWallets || []).map(w => [w.id, w.name]));
+  const creatorMap = Object.fromEntries((s.members || []).map((m) => [m.user_id, m.profiles?.name || m.profiles?.email || m.user_id]));
+  const walletOptions = [{ id: "all", name: "Semua dompet" }, ...(myWallets || []).map((w) => ({ id: w.id, name: w.name }))];
+  const creatorOptions = [{ id: "all", name: "Semua user" }, ...Object.entries(creatorMap).map(([id, name]) => ({ id, name }))];
+  const selectedWalletId = walletFilter === "all" ? null : walletFilter;
+  const openingBalance = selectedWalletId ? walletBalanceAtDate(selectedWalletId, s.wallets || [], s.transactions || [], bounds.start) : null;
+  const transferIn = selectedWalletId
+    ? (s.transactions || []).filter((t) => (t.date || "") >= bounds.start && (t.date || "") <= bounds.end && isTransferIntoWallet(t, selectedWalletId)).reduce((sum, t) => sum + (t.amount || 0), 0)
+    : null;
+  const refundIn = selectedWalletId
+    ? (s.transactions || []).filter((t) => (t.date || "") >= bounds.start && (t.date || "") <= bounds.end && isRefundIntoWallet(t, selectedWalletId)).reduce((sum, t) => sum + (t.amount || 0), 0)
+    : null;
+  const unverifiedCount = filteredTx.filter((t) => t.meta?.verified !== true).length;
+  const noReceiptCount = filteredTx.filter((t) => !t.receiptUrl && !t.receipt_url).length;
+  const closingBalance = selectedWalletId && openingBalance != null && transferIn != null && refundIn != null
+    ? openingBalance + transferIn + refundIn - totalAmount
+    : null;
 
   const byOutlet = PURCHASING_OUTLETS.map(o => ({
     ...o,
@@ -285,10 +359,11 @@ export default function LaporanPurchasing({ s, onClose }) {
     allTransactions: s.transactions || [],
     user,
     outletFilter,
+    selectedWalletId,
     periodLabel: preset === "1 hari" || preset === "Kemarin"
       ? null
       : formatPeriodLabel(preset === "Mingguan" ? "Mingguan" : preset === "Bulanan" ? "Bulanan" : "Custom", bounds),
-  }), [bounds, filteredTx, s.wallets, s.transactions, user, outletFilter, preset]);
+  }), [bounds, filteredTx, s.wallets, s.transactions, user, outletFilter, selectedWalletId, preset]);
 
   // Navigasi prev/next (Mingguan/Bulanan)
   function navigate(dir) {
@@ -411,6 +486,31 @@ export default function LaporanPurchasing({ s, onClose }) {
             ))}
           </div>
 
+          {/* Filter dompet & user input */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
+            <select style={styles.inp} value={walletFilter} onChange={(e) => setWalletFilter(e.target.value)}>
+              {walletOptions.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+            </select>
+            <select style={styles.inp} value={creatorFilter} onChange={(e) => setCreatorFilter(e.target.value)}>
+              {creatorOptions.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
+          </div>
+          <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+            {[
+              ["all", "Semua status verifikasi"],
+              ["unverified", "Belum diverifikasi"],
+              ["verified", "Terverifikasi"],
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                style={{ ...styles.outletBtn, ...(verifiedFilter === id ? styles.outletBtnActive : {}) }}
+                onClick={() => setVerifiedFilter(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
           {/* Summary cards */}
           <div style={styles.summaryGrid}>
             <SummaryCard
@@ -419,10 +519,24 @@ export default function LaporanPurchasing({ s, onClose }) {
               sub={`${totalCount} transaksi`}
               color="#E24B4A"
             />
+            {selectedWalletId && openingBalance != null && transferIn != null && refundIn != null && closingBalance != null && (
+              <SummaryCard
+                label="Ringkasan dompet terpilih"
+                value={`Akhir ${fmtMoney(closingBalance)}`}
+                sub={`Awal ${fmtMoney(openingBalance)} · Dana masuk ${fmtMoney(transferIn)} · Refund ${fmtMoney(refundIn)}`}
+                color="#1D9E75"
+              />
+            )}
             <SummaryCard
               label="Rata-rata per transaksi"
               value={fmtMoney(avgPerTx)}
               color="#BA7517"
+            />
+            <SummaryCard
+              label="Belum diverifikasi"
+              value={`${unverifiedCount} transaksi`}
+              sub={`Tanpa bukti: ${noReceiptCount}`}
+              color="#9333EA"
             />
           </div>
 

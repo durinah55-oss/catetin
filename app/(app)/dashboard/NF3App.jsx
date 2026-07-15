@@ -1,35 +1,40 @@
 "use client";
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import dynamic from "next/dynamic";
 import { Home, BarChart3, Sparkles, User, Mic, Bell, Inbox, Cloud, Eye, EyeOff, Plus, Wallet, ChevronRight, ChevronLeft, ChevronUp, ChevronDown, Pencil, Trash2, ShoppingCart, Users, Zap, Store, PiggyBank, MoreHorizontal, Check, X, ArrowLeft, ScanLine, Keyboard, Fingerprint, Star, ShieldCheck, Monitor, RefreshCw, Sun, Moon, Smartphone, Copy, AlertTriangle, ClipboardList, ClipboardPaste, TrendingUp, TrendingDown, Loader2, Banknote, Filter, Ban, Share2, LogOut, Tags, MessageCircle, ArrowLeftRight, Upload } from "lucide-react";
-import PurchasingForm from "../../../components/PurchasingForm";
 import KategoriPurchasing from "../../../components/KategoriPurchasing";
 import LaporanPurchasing from "../../../components/LaporanPurchasing";
 import AsistenPurchasing from "../../../components/AsistenPurchasing";
 import PurchasingAliasesReview from "../../../components/PurchasingAliasesReview";
-import { loadAppState, saveAppState, mergeAppStateData, mergeCategoriesFromDb, cleanCategoryList, ensurePurchasingCategories, dedupeTransactionsById, aiParse, fetchBusinessAnalysis } from "../../../lib/appState";
+import { loadAppState, saveAppState, mergeAppStateData, mergeAppStateFromCloudPull, mergeCategoriesFromDb, cleanCategoryList, ensurePurchasingCategories, dedupeTransactionsById, aiParse, fetchBusinessAnalysis } from "../../../lib/appState";
 import { checkPurchasingFloor } from "../../../lib/purchasingExpense";
 import { normalizeTransaction, normalizeTransactions, resolveWalletId, resolveTransferIds } from "../../../lib/transactionNormalize";
+import CategoryQuickManage from "../../../components/CategoryQuickManage.jsx";
+import { buildNewCategory, applyRemoveCategory, canEditCategory } from "../../../lib/categoryManage.js";
 import { canDo, visibleWallets, visibleCategories, visibleTransactions, ROLE_LABEL, PURCHASING_WALLET_IDS, showPurchasingAsistenTab, showPurchasingAsistenBeranda, canUsePurchasingAsisten, canManageTransactions, isKasKecilWallet } from "../../../lib/rbac";
-import { resolveBusinessDisplayName } from "../../../lib/canonicalBusiness";
+import { resolveBusinessDisplayName, CANONICAL_BUSINESS_ID } from "../../../lib/canonicalBusiness";
 import {
   businessFeatures,
   visibleWalletsForBusiness,
   visibleTransactionsForBusiness,
+  visibleCategoriesForBusiness,
+  resolveCategoriesForBusiness,
   isOverlayAllowedForBusiness,
   fnbFeatureLabel,
   findCanonicalInList,
   CANONICAL_DISPLAY_NAME,
   businessTypeLabel,
   isFnBOnlyWallet,
+  isNfPurchasingOpsWallet,
 } from "../../../lib/businessFeatures";
 import { resolveAuthMembership } from "../../../lib/membershipResolve";
-import { walletOptionLabel, walletBalanceDisplay, walletsForSaldoTotal, shouldHideWalletBalance } from "../../../lib/walletDisplay";
+import { walletOptionLabel, walletBalanceDisplay, walletsForSaldoTotal, shouldHideWalletBalance, purchasingBalancePresentation, isKasKecilWalletDisplay, isLaciOutletWallet, laciBalancePresentation } from "../../../lib/walletDisplay";
 import { getAccountUi, navConfig } from "../../../lib/accountUi";
 import {
   getPeriodBounds, shiftAnchor, filterTransactions, buildCashflowChart,
   sumInOut, formatPeriodLabel, localISO,
 } from "../../../lib/laporanKeuangan";
-import { submitDailyReport, resubmitDailyReport, settleDailyReport, verifyDailyReportAdmin, requestDailyReportRevision, deleteDailyReport, pendingReports, reportsAwaitingVerify, reportsReadyToSettle, reportsAwaitingRevision, findPendingRevisionReport, reportAwaitingKasirRevision, reportCashAmount, reportSettleUrgency, reportSettleDeadlineLabel, reconcileDailyReports, allDailyReportsForAdmin, LACI_BY_OUTLET, LACI_FLOOR } from "../../../lib/kasirHarian";
+import { submitDailyReport, resubmitDailyReport, settleDailyReport, verifyDailyReportAdmin, requestDailyReportRevision, deleteDailyReport, collectAllDailyReportTxIds, pendingReports, reportsAwaitingVerify, reportsReadyToSettle, reportsAwaitingRevision, reportsForDate, findPendingRevisionReport, reportAwaitingKasirRevision, reportCashAmount, reportSettleUrgency, reportSettleDeadlineLabel, reconcileDailyReports, allDailyReportsForAdmin, LACI_BY_OUTLET, LACI_FLOOR } from "../../../lib/kasirHarian";
 import { submitVoidLog, pendingVoidLogs, reviewVoidLog, visibleVoidLogs, VOID_TYPES } from "../../../lib/voidLog";
 import {
   submitSdmReport, buildSdmSnapshot, getOutletConfig, todaySdmReport,
@@ -44,7 +49,7 @@ import {
 } from "../../../lib/reportChannels";
 import {
   createStaffMessage, createRevisionRequestMessage, visibleStaffMessages, unreadStaffCount,
-  markStaffMessageRead, markRevisionMessagesRead, resolveRevisionMessages, cancelRevisionMessagesForReport, isRevisionRequestMessage,
+  markStaffMessageRead, markRevisionMessagesRead, resolveRevisionMessages, fulfillSubmittedReportMessages, cancelRevisionMessagesForReport, isRevisionRequestMessage,
   applyRevisionNoticesFromMessages, formatMessageTime, revisionMessageReportDate, revisionNoteForReport,
   prependStaffMessage, createPurchasingFundMessage, createDailyReportSubmittedMessage,
   createRevisionSubmittedAckMessage,
@@ -53,7 +58,7 @@ import {
 } from "../../../lib/staffMessages";
 import {
   NOTIFICATION_CATALOG, hydrateNotificationPrefs, getStaffMessageAction,
-  getMessageKind, isActionableStaffMessage, notificationKindLabel,
+  getMessageKind, isActionableStaffMessage, isStaffMessageStale, notificationKindLabel,
 } from "../../../lib/notificationCatalog";
 import { mergeDailyRemindersIntoDoc } from "../../../lib/notificationReminders";
 import {
@@ -67,8 +72,9 @@ import {
   formatOmsetWa, formatKeuanganWa, formatVoidWa,
 } from "../../../lib/shareWa";
 import { pairPageUrl } from "../../../lib/appUrl.js";
+import { exportKeuanganCsv, exportKeuanganPdf } from "../../../lib/laporanKeuanganExport.js";
 import { compressWalletLogo, walletHasLogo } from "../../../lib/walletLogo.js";
-import { patchWalletCatalog, sortWallets, migrateReportChannelSettles } from "../../../lib/wallets.js";
+import { patchWalletCatalog, sortWallets, migrateReportChannelSettles, foodWalletDisplayName } from "../../../lib/wallets.js";
 import {
   NF_FNB_WALLETS,
   getWalletCatalogForBusiness,
@@ -82,21 +88,48 @@ import {
   isCrossBusinessShareableWallet,
   SHARED_WALLET_POLICY_HINT,
 } from "../../../lib/sharedWalletPolicy.js";
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import {
+  sharedWalletId,
+  isSharedWallet,
+  mirrorBalancesForLinks,
+  sourceBusinessIdsForLinks,
+  applyMirrorBalances,
+  mergeWithLocalTransactions,
+  filterSharedTransactionsForView,
+  mapTransactionsToSharedWallet,
+  walletTransactionsFromDoc,
+} from "../../../lib/sharedWalletMirror.js";
+import { canWriteSharedBank } from "../../../lib/sharedBankWrite.js";
+import { fetchSharedBankBalances, fetchSharedBankTransactions, postSharedBankTx } from "../../../lib/repo";
 import PwaInstallBanner, { registerServiceWorker } from "../../../components/PwaInstallBanner";
-import NF3Assistant from "../../../components/NF3Assistant";
 import TransactionEditSheet from "../../../components/TransactionEditSheet";
 import { getTransactionEditPolicy, validateTransactionUpdate, applyTransactionDelete } from "../../../lib/transactionEdit";
 import { recordDailyReportDelete } from "../../../lib/dailyReportDelete";
 import { isPurchasingTx } from "../../../lib/purchasingExpense";
 import { purchasingTxTitle, purchasingTxSubtitle } from "../../../lib/purchasingItems";
 import { showActionToast } from "../../../lib/actionToast";
-import { applyBalanceAdjustment, computeBalanceAdjustment } from "../../../lib/adjustSaldo";
+import { subscribeAppStateChanges } from "../../../lib/appStateRealtime.js";
+import { applyBalanceAdjustment, computeBalanceAdjustment, recentBalanceAdjustments, countBalanceAdjustments } from "../../../lib/adjustSaldo";
 import { playRevisionAlertSound, playNotificationPing, unlockNotificationAudio } from "../../../lib/notificationSound";
 import ActionToast from "../../../components/ActionToast";
 
-/** Interval muat ulang awan — jangan terlalu sering (ganggu input staf). */
-const CLOUD_POLL_MS = 45 * 1000;
+const CashflowChart = dynamic(() => import("../../../components/CashflowChart"), {
+  ssr: false,
+  loading: () => <div style={{ height: 180, display: "grid", placeItems: "center", color: "var(--ink3)", fontSize: 13 }}>Memuat grafik…</div>,
+});
+const PurchasingForm = dynamic(() => import("../../../components/PurchasingForm"), { ssr: false });
+const NF3Assistant = dynamic(() => import("../../../components/NF3Assistant"), { ssr: false });
+
+/** Cadangan poll — utama pakai Supabase Realtime (langsung saat ada simpan di HP lain). */
+const CLOUD_POLL_FALLBACK_MS = 2 * 60 * 1000;
+const REALTIME_PULL_DEBOUNCE_MS = 350;
+const SAVE_DEBOUNCE_MS = 1000;
+const CRITICAL_SAVE_WINDOW_MS = 3500;
+
+function extractSavePayload(doc) {
+  const { currentUser, users, _systemThemeTick, _cloudUpdatedAt, _cloudLoaded, ...data } = doc || {};
+  return data;
+}
 
 function isUserTypingInForm() {
   if (typeof document === "undefined") return false;
@@ -202,13 +235,78 @@ const isoOffset = (n) => { const d = new Date(); d.setDate(d.getDate() + n); ret
 const formatSyncClock = (iso) => {
   if (!iso) return "—";
   try {
-    return new Date(iso).toLocaleString("id-ID", {
-      day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
-    });
+    const d = new Date(iso);
+    const sameDay = localISO(d) === today();
+    return d.toLocaleString("id-ID", sameDay
+      ? { hour: "2-digit", minute: "2-digit" }
+      : { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
   } catch {
     return "—";
   }
 };
+
+/** Pecah kode sync jadi hash singkat + meta jumlah transaksi. */
+const parseSyncCode = (code) => {
+  if (!code) return { hash: "—", txMeta: null };
+  const m = String(code).match(/^(\d+)tx·(.+)$/);
+  if (m) {
+    return { hash: m[2], txMeta: `${Number(m[1]).toLocaleString("id-ID")} transaksi` };
+  }
+  return { hash: code, txMeta: null };
+};
+
+function SyncStatusStrip({ syncInfo, realtimeLive, cloudSyncState, syncHint }) {
+  const { hash, txMeta } = parseSyncCode(syncInfo?.code);
+  return (
+    <div style={{ margin: "0 16px 12px" }}>
+      {syncInfo?.code && (
+        <div style={{
+          padding: "10px 12px", borderRadius: 12, background: "var(--surface)",
+          border: "1px solid var(--line)", fontSize: 12, lineHeight: 1.4,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+              {realtimeLive && (
+                <span style={{
+                  display: "inline-flex", alignItems: "center", gap: 5,
+                  fontSize: 10, fontWeight: 800, color: "var(--in-text)",
+                  padding: "2px 8px", borderRadius: 99, background: "var(--in-soft)",
+                }}>
+                  <span style={{ width: 6, height: 6, borderRadius: 99, background: "var(--in-text)" }} />
+                  Live
+                </span>
+              )}
+              <span style={{ fontWeight: 700, color: "var(--ink2)" }}>Kode</span>
+              <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 800, color: "var(--ink)", letterSpacing: "0.04em" }} title="Harus sama di semua HP">
+                {hash}
+              </span>
+              {txMeta && <span style={{ fontSize: 10, color: "var(--ink3)" }}>{txMeta}</span>}
+            </div>
+            <div style={{ display: "flex", gap: 10, fontSize: 11, color: "var(--ink3)", flexShrink: 0 }}>
+              <span>Awan {formatSyncClock(syncInfo.cloudAt)}</span>
+              <span>HP {formatSyncClock(syncInfo.pulledAt)}</span>
+            </div>
+          </div>
+        </div>
+      )}
+      {cloudSyncState === "syncing" && (
+        <div style={{ marginTop: syncInfo?.code ? 8 : 0, padding: "8px 12px", borderRadius: 10, background: "var(--brand-soft)", color: "var(--brand)", fontWeight: 700, fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+          <Loader2 size={14} className="animate-spin" /> Menyinkronkan…
+        </div>
+      )}
+      {cloudSyncState === "ok" && syncHint && (
+        <div style={{ marginTop: syncInfo?.code ? 8 : 0, padding: "8px 12px", borderRadius: 10, background: "#ECFDF5", color: "var(--in-text)", fontWeight: 700, fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+          <Check size={14} /> {syncHint}
+        </div>
+      )}
+      {cloudSyncState === "err" && (
+        <div style={{ marginTop: syncInfo?.code ? 8 : 0, padding: "8px 12px", borderRadius: 10, background: "#FEF2F2", color: "#B91C1C", fontWeight: 700, fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+          <X size={14} /> Gagal sync — tap ☁️ lagi
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** Kode singkat revisi data — bandingkan antar akun (owner vs purchasing). */
 const syncRevisionCode = (doc) => {
@@ -223,15 +321,26 @@ const buildSyncMeta = (doc, prevDoc, pulledAt = new Date().toISOString()) => {
   const cloudAt = doc?._cloudUpdatedAt || null;
   const code = syncRevisionCode(doc);
   let hint = null;
+  let saldoDelta = null;
   if (prevDoc) {
     const dTx = (doc?.transactions?.length || 0) - (prevDoc?.transactions?.length || 0);
     const cloudChanged = cloudAt && prevDoc?._cloudUpdatedAt && cloudAt !== prevDoc._cloudUpdatedAt;
     if (dTx > 0) hint = `+${dTx} transaksi dari awan`;
-    else if (dTx < 0) hint = `${dTx} transaksi`;
+    else if (dTx < 0) hint = `${dTx} transaksi dari awan`;
     else if (cloudChanged) hint = "Data awan diperbarui";
     else hint = "Sudah versi terbaru";
+
+    const watchWallets = ["w_kas_kecil", "w_laci_kbu", "w_laci_ksm", "w_laci_smt", "w_kas_besar"];
+    for (const wid of watchWallets) {
+      const before = walletBalance(wid, prevDoc.wallets, prevDoc.transactions);
+      const after = walletBalance(wid, doc?.wallets, doc?.transactions);
+      if (before !== after) {
+        saldoDelta = { walletId: wid, before, after, delta: after - before };
+        break;
+      }
+    }
   }
-  return { cloudAt, pulledAt, code, hint };
+  return { cloudAt, pulledAt, code, hint, saldoDelta };
 };
 
 // ─── Storage ───────────────────────────────────────────────
@@ -321,12 +430,15 @@ const formatWalletBal = (w, bal, cur, user) => walletBalanceDisplay(w, bal, cur,
 function patchPurchasingWallet(w) {
   if (!w) return w;
   const out = { ...w };
+  if (out.id === "w_kas_kecil" && /kas\s*kecil\s*purchasing/i.test(out.name || "")) {
+    out.name = "Kas Kecil Dodi";
+  }
   const kasKecilName = /kas\s*kecil/i.test(w.name || "");
 
   if (PURCHASING_WALLET_IDS.has(w.id) || w.purchasingUse === true || kasKecilName) {
     out.purchasingUse = true;
   }
-  if (w.id === "w_shopee_paylater") {
+  if (w.type === "paylater" || w.liability === true || w.id === "w_shopee_paylater" || w.id === "w_fish_shopee_paylater") {
     out.type = out.type || "paylater";
     out.liability = true;
     out.allowNegative = true;
@@ -381,7 +493,7 @@ function mergeWallets(defaults, saved, { mode = "canonical" } = {}) {
   const defaultIds = new Set((defaults || []).map((d) => d.id));
   savedList.filter((w) => !defaultIds.has(w.id)).forEach((w) => merged.push(patchPurchasingWallet(w)));
   if (mode === "canonical") return patchWalletCatalog(merged);
-  return sortWallets(merged);
+  return patchWalletCatalog(sortWallets(merged));
 }
 
 async function loadState(bizId, { businessType } = {}) {
@@ -391,15 +503,28 @@ async function loadState(bizId, { businessType } = {}) {
     const base = defaultState();
     const walletSetup = savedClean.walletSetup || saved.walletSetup || null;
     const resolvedType = walletSetup?.businessType || savedClean.profile?.businessType || saved.profile?.businessType || businessType;
+    const isFnb = bizId === CANONICAL_BUSINESS_ID || resolvedType === "fnb";
     const mergeMode = resolveWalletMergeMode(bizId, savedClean);
     const catalog = getWalletCatalogForBusiness(bizId, resolvedType);
+    const savedWalletList = (savedClean.wallets || saved.wallets || []).filter(
+      (w) => isFnb || !isFnBOnlyWallet(w)
+    );
     const mergedWallets = mergeWallets(
       mergeMode === "saved-only" ? [] : catalog,
-      savedClean.wallets || saved.wallets,
+      savedWalletList,
       { mode: mergeMode }
     );
     const wallets = rebuildWalletsWithShared(mergedWallets, walletSetup);
       const txs = dedupeTransactionsById(savedClean.transactions || saved.transactions || []);
+    const savedCats = savedClean.categories || saved.categories || [];
+    const categories = isFnb
+      ? ensurePurchasingCategories(
+          cleanCategoryList(mergeCategoriesFromDb(base.categories, savedCats)),
+          cleanCategoryList
+        )
+      : cleanCategoryList(
+          resolveCategoriesForBusiness(savedCats, { id: bizId, type: resolvedType }) || []
+        );
     return {
       ...base,
       ...savedClean,
@@ -407,12 +532,7 @@ async function loadState(bizId, { businessType } = {}) {
       _cloudLoaded: true,
       walletSetup,
       wallets,
-      categories: ensurePurchasingCategories(
-        cleanCategoryList(
-          mergeCategoriesFromDb(base.categories, savedClean.categories || saved.categories || [])
-        ),
-        cleanCategoryList
-      ),
+      categories,
       transactions: txs,
       profile: { ...base.profile, ...(savedClean.profile || saved.profile) },
       automation: { ...base.automation, ...(savedClean.automation || saved.automation) },
@@ -437,7 +557,7 @@ async function loadState(bizId, { businessType } = {}) {
 async function saveState(bizId, s) {
   const { currentUser, users, _systemThemeTick, _cloudUpdatedAt, _cloudLoaded, ...data } = s || {};
   if (data.categories) data.categories = cleanCategoryList(data.categories);
-  await saveAppState(bizId, data);
+  return saveAppState(bizId, data);
 }
 
 /** Identitas login — satu-satunya sumber permission (bukan state tersimpan). */
@@ -451,6 +571,7 @@ function sessionUser(authUser) {
   return {
     id: authUser.id,
     name: authUser.name,
+    email: authUser.email || null,
     role: resolved.role,
     outlet: resolved.outlet,
   };
@@ -573,11 +694,68 @@ async function aiParseReceipt(b64, mime, cats) {
 const Card = ({ children, style, className = "", onClick }) => (
   <div onClick={onClick} style={{ background: "var(--surface)", border: "1px solid var(--line)", borderRadius: 16, ...style }} className={className}>{children}</div>
 );
-const Pill = ({ children, active, onClick, color }) => (
-  <button onClick={onClick} style={{ padding: "8px 14px", borderRadius: 999, fontSize: 13, fontWeight: 600, border: active ? "none" : "1px solid var(--line)", background: active ? "var(--brand)" : "var(--surface)", color: active ? "#fff" : "var(--ink2)", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", cursor: "pointer" }}>
-    {color && <span style={{ width: 8, height: 8, borderRadius: 99, background: color, display: "inline-block" }} />}{children}
+const Pill = ({ children, active, onClick, color, compact, fullWidth }) => (
+  <button onClick={onClick} style={{ padding: compact ? "6px 10px" : "8px 14px", borderRadius: 999, fontSize: compact ? 12 : 13, fontWeight: 600, border: active ? "none" : "1px solid var(--line)", background: active ? (color || "var(--brand)") : "var(--surface)", color: active ? "#fff" : "var(--ink2)", display: "inline-flex", alignItems: "center", justifyContent: fullWidth ? "center" : "flex-start", gap: 6, whiteSpace: "nowrap", cursor: "pointer", width: fullWidth ? "100%" : undefined, flexShrink: 0, overflow: fullWidth ? "hidden" : undefined, textOverflow: fullWidth ? "ellipsis" : undefined, lineHeight: 1.25, WebkitTapHighlightColor: "transparent" }}>
+    {color && !active && <span style={{ width: 7, height: 7, borderRadius: 99, background: color, display: "inline-block", flexShrink: 0 }} />}{children}
   </button>
 );
+
+function FilterChipRow({ label, children, style }) {
+  return (
+    <div style={{ padding: "6px 16px", ...style }}>
+      {label && (
+        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--ink3)", marginBottom: 6, letterSpacing: "0.04em" }}>
+          {label}
+        </div>
+      )}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+const manualFieldInput = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: "1px solid var(--line)",
+  background: "var(--surface)",
+  fontSize: 14,
+  color: "var(--ink)",
+  outline: "none",
+  minWidth: 0,
+};
+
+function CatChip({ children, active, color, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        flex: "1 1 calc(50% - 4px)",
+        maxWidth: "calc(50% - 4px)",
+        minWidth: 0,
+        padding: "10px 8px",
+        borderRadius: 10,
+        fontSize: 12,
+        fontWeight: 600,
+        lineHeight: 1.35,
+        whiteSpace: "normal",
+        wordBreak: "break-word",
+        textAlign: "center",
+        border: active ? "none" : "1px solid var(--line)",
+        background: active ? color : "var(--surface)",
+        color: active ? "#fff" : "var(--ink2)",
+        cursor: "pointer",
+        WebkitTapHighlightColor: "transparent",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
 const Tog = ({ on, onToggle }) => (
   <button onClick={onToggle} style={{ width: 48, height: 28, borderRadius: 999, background: on ? "var(--brand)" : "var(--line)", padding: 3, display: "flex", alignItems: "center", justifyContent: on ? "flex-end" : "flex-start", border: "none", cursor: "pointer", transition: "background .2s", flexShrink: 0 }}>
     <span style={{ width: 22, height: 22, borderRadius: 999, background: "#fff", display: "block" }} />
@@ -744,7 +922,7 @@ function DailyTaskRow({ step, title, subtitle, done, blocked, urgent, count, opt
     "task-row-inner",
     done ? "task-row-done" : urgent ? "task-row-urgent" : !blocked && !optional ? "task-row-pending" : "",
   ].filter(Boolean).join(" ");
-  const badgeLabel = done ? "Selesai" : blocked ? "Tunggu" : urgent ? (count ? `${count} pending` : "Perlu aksi") : optional ? "Opsional" : "Wajib isi";
+  const badgeLabel = done ? "Selesai" : blocked ? "Tunggu" : urgent ? (count ? `${count} perlu` : "Perlu aksi") : optional ? "Opsional" : "Belum";
   const badgeBg = done ? "var(--in-soft)" : blocked ? "var(--surface2)" : urgent ? "#FEE2E2" : optional ? "var(--surface2)" : "#FEF3C7";
   const badgeColor = done ? "var(--in-text)" : blocked ? "var(--ink3)" : urgent ? "var(--out-text)" : optional ? "var(--ink3)" : "#B45309";
   const actionLabel = done ? "Lihat" : urgent ? "Proses" : optional ? "Buka" : "Isi";
@@ -784,23 +962,23 @@ function DailyTaskRow({ step, title, subtitle, done, blocked, urgent, count, opt
           {done ? <Check size={20} strokeWidth={3} /> : optional ? "★" : step}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 800, fontSize: 15, color: "var(--ink)", lineHeight: 1.3, textDecoration: done ? "none" : "none" }}>{title}</div>
-          <div style={{ fontSize: 12, color: done ? "var(--ink3)" : "var(--ink2)", marginTop: 3, lineHeight: 1.45 }}>{subtitle}</div>
-        </div>
-        <div className="task-row-action-col" style={{ flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-          <span style={{
-            fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
-            padding: "3px 8px", borderRadius: 99, background: badgeBg, color: badgeColor,
-            whiteSpace: "nowrap",
-          }}>
-            {badgeLabel}
-          </span>
-          {!blocked && (
-            <span style={{ fontSize: 12, fontWeight: 700, color: done ? "var(--ink3)" : urgent ? "#B45309" : "var(--brand)", display: "flex", alignItems: "center", gap: 2 }}>
-              {actionLabel} <ChevronRight size={14} />
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+            <div style={{ fontWeight: 800, fontSize: 15, color: "var(--ink)", lineHeight: 1.3, flex: 1, minWidth: 0 }}>{title}</div>
+            <span style={{
+              fontSize: 10, fontWeight: 700, letterSpacing: "0.02em",
+              padding: "3px 8px", borderRadius: 99, background: badgeBg, color: badgeColor,
+              whiteSpace: "nowrap", flexShrink: 0, marginTop: 1,
+            }}>
+              {badgeLabel}
             </span>
-          )}
+          </div>
+          <div style={{ fontSize: 12, color: done ? "var(--ink3)" : "var(--ink2)", marginTop: 4, lineHeight: 1.45 }}>{subtitle}</div>
         </div>
+        {!blocked && (
+          <span style={{ fontSize: 12, fontWeight: 700, color: done ? "var(--ink3)" : urgent ? "#B45309" : "var(--brand)", display: "flex", alignItems: "center", gap: 2, flexShrink: 0, alignSelf: "center" }}>
+            {actionLabel} <ChevronRight size={14} />
+          </span>
+        )}
       </div>
     </button>
   );
@@ -831,7 +1009,7 @@ function RoleDailyChecklist({ tasks, accentGradient, headerLabel = "Checklist Ha
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", opacity: 0.85 }}>{headerLabel}</div>
             <div style={{ fontWeight: 800, fontSize: 17, marginTop: 4, lineHeight: 1.3 }}>{statusLine}</div>
-            {headerHint && <div style={{ fontSize: 12, opacity: 0.82, marginTop: 4, lineHeight: 1.4 }}>{headerHint}</div>}
+            {headerHint && <div style={{ fontSize: 11, opacity: 0.78, marginTop: 5, lineHeight: 1.4 }}>{headerHint}</div>}
           </div>
           {total > 0 && (
             <div style={{
@@ -869,15 +1047,18 @@ function RoleDailyChecklist({ tasks, accentGradient, headerLabel = "Checklist Ha
 }
 
 // ─── Konteks bisnis (F&B vs e-commerce) ───────────────────
-function BusinessContextBanner({ business, businesses, switchBusiness, features }) {
+function BusinessContextBanner({ business, businesses, switchBusiness, features, user }) {
   const canonical = findCanonicalInList(businesses || []);
   const multi = (businesses?.length || 0) > 1;
+  // Hanya owner (yang juga anggota F&B) yang boleh pindah ke Nusa Food dari Fishing.
+  // Staf NF (admin/purchasing) tidak saling terhubung ke FNB.
+  const canSwitchToFnb = user?.role === "owner" && canonical && switchBusiness;
 
   if (features.isFnB) {
     if (!multi) return null;
     return (
-      <div style={{ margin: "0 16px 14px", padding: "10px 14px", background: "var(--brand-soft)", border: "1px solid var(--line)", borderRadius: 12, fontSize: 12, color: "var(--brand-text)", lineHeight: 1.45 }}>
-        <span style={{ fontWeight: 800 }}>{CANONICAL_DISPLAY_NAME}</span> — resto KBU/KSM/SMT. Ganti bisnis lain lewat tab <b>Atur</b>.
+      <div style={{ margin: "0 16px 12px", padding: "8px 12px", background: "var(--surface2)", border: "1px solid var(--line)", borderRadius: 10, fontSize: 11, color: "var(--ink2)", lineHeight: 1.4, textAlign: "center" }}>
+        Punya bisnis lain? Ganti lewat tab <b style={{ color: "var(--brand)" }}>Atur</b>
       </div>
     );
   }
@@ -888,10 +1069,20 @@ function BusinessContextBanner({ business, businesses, switchBusiness, features 
         {resolveBusinessDisplayName(business)} · {features.label}
       </div>
       <div style={{ fontSize: 12, color: "#1E3A8A", marginTop: 6, lineHeight: 1.5 }}>
-        Anda sedang di bisnis <b>e-commerce/UMKM</b> — dompet kas & operasional terpisah dari resto.
-        Hanya <b>rekening bank</b> yang boleh dihubungkan antar bisnis; NF Cash & laci outlet hanya di {CANONICAL_DISPLAY_NAME}.
+        {canSwitchToFnb
+          ? (
+            <>
+              Anda sedang di bisnis <b>e-commerce/UMKM</b> — dompet kas & operasional terpisah dari resto.
+              Hanya <b>rekening bank</b> yang boleh dihubungkan antar bisnis; NF Cash & laci outlet hanya di {CANONICAL_DISPLAY_NAME}.
+            </>
+          )
+          : (
+            <>
+              Akun staf <b>NF Nusa Fishing</b> — dompet & transaksi hanya untuk bisnis ini, terpisah dari resto {CANONICAL_DISPLAY_NAME}.
+            </>
+          )}
       </div>
-      {canonical && switchBusiness && (
+      {canSwitchToFnb && (
         <button
           type="button"
           onClick={() => switchBusiness(canonical.id)}
@@ -915,57 +1106,144 @@ function BusinessContextBanner({ business, businesses, switchBusiness, features 
   );
 }
 
-function FnbGateSheet({ target, onClose, onSwitch, canonicalName }) {
+function FnbGateSheet({ target, onClose, onSwitch, canonicalName, canSwitch }) {
   return (
     <Sheet title="Fitur khusus Nusa Food" onClose={onClose}>
       <div style={{ padding: "8px 4px 24px", fontSize: 14, lineHeight: 1.55, color: "var(--ink2)" }}>
         <p style={{ margin: "0 0 12px" }}>
           <b>{fnbFeatureLabel(target)}</b> hanya untuk resto F&B (KBU, KSM, SMT) — bukan untuk bisnis e-commerce/UMKM yang sedang aktif.
         </p>
-        <p style={{ margin: "0 0 16px" }}>
-          Pindah ke <b>{canonicalName || CANONICAL_DISPLAY_NAME}</b> untuk settle omset, purchasing, atau tugas outlet.
-        </p>
-        <button
-          type="button"
-          onClick={onSwitch}
-          style={{
-            width: "100%",
-            padding: "13px 14px",
-            borderRadius: 12,
-            border: "none",
-            background: "var(--brand)",
-            color: "#fff",
-            fontWeight: 700,
-            fontSize: 14,
-            cursor: "pointer",
-          }}
-        >
-          Pindah ke {canonicalName || CANONICAL_DISPLAY_NAME}
-        </button>
+        {canSwitch ? (
+          <>
+            <p style={{ margin: "0 0 16px" }}>
+              Pindah ke <b>{canonicalName || CANONICAL_DISPLAY_NAME}</b> untuk settle omset, purchasing resto, atau tugas outlet.
+            </p>
+            <button
+              type="button"
+              onClick={onSwitch}
+              style={{
+                width: "100%",
+                padding: "13px 14px",
+                borderRadius: 12,
+                border: "none",
+                background: "var(--brand)",
+                color: "#fff",
+                fontWeight: 700,
+                fontSize: 14,
+                cursor: "pointer",
+              }}
+            >
+              Pindah ke {canonicalName || CANONICAL_DISPLAY_NAME}
+            </button>
+          </>
+        ) : (
+          <p style={{ margin: "0 0 8px" }}>
+            Akun ini hanya untuk bisnis yang sedang aktif — tidak terhubung ke Nusa Food (F&B).
+          </p>
+        )}
       </div>
     </Sheet>
   );
 }
 
 // ─── Beranda ───────────────────────────────────────────────
-function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudSync, cloudSyncState, syncInfo, bizId, session, businessDisplayName, onCatat, business, businesses, switchBusiness, features }) {
+function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudSync, cloudSyncState, syncInfo, realtimeLive, bizId, session, businessDisplayName, onCatat, business, businesses, switchBusiness, features, onOpenWalletHistory, sharedMirror, sharedTxByWallet }) {
   const cur = s.profile.currency;
   const prefix = today().slice(0, 7);
   const user = s.currentUser || { role: "kasir" };
-  const myWallets = visibleWalletsForBusiness(s.wallets, user, business);
-  const scopedTx = visibleTransactionsForBusiness(s.transactions, s.wallets, user, business);
-  const monthIn = scopedTx.filter(t => t.type === "in" && t.date.startsWith(prefix)).reduce((a, b) => a + b.amount, 0);
-  const monthOut = scopedTx.filter(t => t.type === "out" && t.date.startsWith(prefix)).reduce((a, b) => a + b.amount, 0);
-  const totalSaldo = user.role === "purchasing"
-    ? walletBalance("w_kas_kecil", s.wallets, s.transactions)
-    : walletsForSaldoTotal(myWallets, user).reduce((a, w) => a + walletBalance(w.id, s.wallets, s.transactions), 0);
+  const myWallets = useMemo(() => visibleWalletsForBusiness(s.wallets, user, business), [s.wallets, user, business]);
+  const purchasingArea = user.role === "purchasing" && user.outlet && !["KBU", "KSM", "SMT"].includes(user.outlet)
+    ? String(user.outlet)
+    : "";
+  const assignedWallets = useMemo(
+    () => (myWallets || []).filter((w) => Array.isArray(w?.allowedUserIds) && !!user?.id && w.allowedUserIds.includes(user.id)),
+    [myWallets, user?.id]
+  );
+  const hasExplicitWalletAssignment = assignedWallets.length > 0;
+  const areaWallet = useMemo(() => {
+    if (hasExplicitWalletAssignment) {
+      return assignedWallets.find((w) => w && w.type !== "rekening") || assignedWallets[0] || null;
+    }
+    if (!purchasingArea) return null;
+    const area = purchasingArea.toLowerCase();
+    return myWallets.find((w) => {
+      if (!w || w.type === "rekening") return false;
+      const idText = String(w.id || "").toLowerCase().replace(/^w_/, "").replace(/_/g, " ");
+      const nameText = String(w.name || "").toLowerCase();
+      return nameText.includes(area) || idText.includes(area);
+    }) || null;
+  }, [hasExplicitWalletAssignment, assignedWallets, purchasingArea, myWallets]);
+  const orderedWallets = useMemo(() => {
+    if (!(user.role === "purchasing" && areaWallet?.id)) return myWallets;
+    const first = myWallets.find((w) => w.id === areaWallet.id);
+    const rest = myWallets.filter((w) => w.id !== areaWallet.id);
+    return first ? [first, ...rest] : myWallets;
+  }, [user.role, areaWallet?.id, myWallets]);
+  const scopedTx = useMemo(() => {
+    const local = visibleTransactionsForBusiness(s.transactions, s.wallets, user, business);
+    return mergeWithLocalTransactions(local, sharedTxByWallet);
+  }, [s.transactions, s.wallets, user, business, sharedTxByWallet]);
+  const summaryTx = useMemo(() => {
+    if (user.role !== "purchasing") return scopedTx;
+    if (areaWallet?.id) {
+      const wid = areaWallet.id;
+      return (scopedTx || []).filter((t) => {
+        if (t.type === "transfer") {
+          const { from, to } = resolveTransferIds(t);
+          return from === wid || to === wid;
+        }
+        return resolveWalletId(t) === wid;
+      });
+    }
+    const sharedIds = new Set(
+      (myWallets || [])
+        .filter((w) => isSharedWallet(w) && w.sharedLink?.linkKind === "ops_share")
+        .map((w) => w.id)
+    );
+    if (sharedIds.size) {
+      return (scopedTx || []).filter((t) => sharedIds.has(resolveWalletId(t)));
+    }
+    return scopedTx;
+  }, [scopedTx, user.role, areaWallet?.id, myWallets]);
+  const monthIn = useMemo(
+    () => summaryTx.filter(t => t.type === "in" && t.date.startsWith(prefix)).reduce((a, b) => a + b.amount, 0),
+    [summaryTx, prefix]
+  );
+  const monthOut = useMemo(
+    () => summaryTx.filter(t => t.type === "out" && t.date.startsWith(prefix)).reduce((a, b) => a + b.amount, 0),
+    [summaryTx, prefix]
+  );
+  const totalSaldo = useMemo(() => {
+    if (user.role !== "purchasing") {
+      return walletsForSaldoTotal(myWallets, user).reduce(
+        (a, w) => a + walletBalance(w.id, s.wallets, s.transactions),
+        0
+      );
+    }
+    // Purchasing: hanya dompet belanja yang saldonya boleh dilihat (bukan rekening Sam).
+    const visibleBal = walletsForSaldoTotal(myWallets, user);
+    if (!visibleBal.length) return 0;
+    const primary =
+      (areaWallet && visibleBal.some((w) => w.id === areaWallet.id) ? areaWallet : null) ||
+      visibleBal.find((w) => w.purchasingUse || isNfPurchasingOpsWallet(w)) ||
+      visibleBal[0];
+    return primary ? walletBalance(primary.id, s.wallets, s.transactions) : 0;
+  }, [user.role, myWallets, s.wallets, s.transactions, areaWallet]);
   const inboxCount = canDo(user.role, "inputIncome") ? (s.rawInbox || []).length : 0;
-  const notifCount = unreadStaffCount(s.staffMessages, user);
-  const scopeLabel = user.role === "kasir" ? `Laci ${user.outlet}` : user.role === "purchasing" ? "Dompet belanja" : "Seluruh dompet";
+  const notifCount = unreadStaffCount(s.staffMessages, user, s.dailyReports);
+  const scopeLabel = user.role === "kasir"
+    ? `Laci ${user.outlet}`
+    : user.role === "purchasing"
+      ? (areaWallet?.name || (purchasingArea ? `Lokasi ${purchasingArea}` : "Dompet belanja"))
+      : "Seluruh dompet";
   const waitingSettle = features.settleLaci && canDo(user.role, "settleLaci") ? pendingReports(s.dailyReports, s.transactions) : [];
   const awaitingVerify = features.settleLaci && canDo(user.role, "settleLaci") ? reportsAwaitingVerify(s.dailyReports, s.transactions) : [];
   const readyToSettle = features.settleLaci && canDo(user.role, "settleLaci") ? reportsReadyToSettle(s.dailyReports, s.transactions) : [];
   const overdueSettle = waitingSettle.filter(r => reportSettleUrgency(r) === "overdue").length;
+  const todayOmsetByOutlet = new Map(reportsForDate(s.dailyReports, today()).map(r => [r.outlet, r]));
+  const missingOmsetToday = features.settleLaci && canDo(user.role, "settleLaci")
+    ? OUTLETS.filter(o => !todayOmsetByOutlet.has(o))
+    : [];
   const todayReport = user.role === "kasir"
     ? (s.dailyReports || []).find(r => r.outlet === user.outlet && r.date === today() && r.status !== "settled")
     : null;
@@ -984,41 +1262,40 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
   const todayOutTx = scopedTx.filter(t => t.type === "out" && t.date === today());
   const todayOutTotal = todayOutTx.reduce((a, t) => a + t.amount, 0);
   const adminSosmedEnabled = showSosmed && user.role !== "kasir" && sosmedOutlet && isSosmedEnabled(s.sosmedConfig, sosmedOutlet);
+  const purchasingSaldo = user.role === "purchasing" ? purchasingBalancePresentation(totalSaldo, fmtMoney, cur) : null;
 
   return (
     <div style={{ padding: "0 0 90px" }}>
       {/* header */}
-      <div style={{ padding: "16px 20px 12px", display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
-        <div>
+      <div style={{ padding: "16px 20px 0", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <div style={{ fontSize: 26, fontWeight: 800, color: "var(--ink)" }}>{businessDisplayName || s.profile.name}</div>
+            <div style={{ fontSize: 26, fontWeight: 800, color: "var(--ink)", lineHeight: 1.15 }}>{businessDisplayName || s.profile.name}</div>
             <span style={{ fontSize: 11, fontWeight: 800, padding: "3px 10px", borderRadius: 99, background: ui.badgeBg, color: ui.badgeColor }}>
               {ui.roleLabel}
             </span>
           </div>
-          <div style={{ fontSize: 13, color: "var(--ink3)", marginTop: 2 }}>{dayLabel(today())}</div>
-          <div style={{ fontSize: 14, fontWeight: 700, color: "var(--ink2)", marginTop: 6 }}>{ui.homeTitle}</div>
-          {ui.homeSubtitle && (
-            <div style={{ fontSize: 12, color: "var(--ink3)", marginTop: 2, lineHeight: 1.35 }}>{ui.homeSubtitle}</div>
-          )}
-          {syncInfo?.code && (
-            <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: 6, lineHeight: 1.45 }}>
-              Kode data{" "}
-              <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 700, color: "var(--ink2)" }} title="Bandingkan dengan akun lain — harus sama jika data sudah sinkron">
-                {syncInfo.code}
-              </span>
-              {" · "}Awan {formatSyncClock(syncInfo.cloudAt)}
-              {" · "}HP {formatSyncClock(syncInfo.pulledAt)}
-              {cloudSyncState === "syncing" && <span style={{ color: "var(--brand)" }}> · menyinkronkan…</span>}
-              {cloudSyncState === "ok" && syncInfo.hint && (
-                <span style={{ color: "var(--in-text)", fontWeight: 600 }}> · {syncInfo.hint}</span>
-              )}
-            </div>
+          <div style={{ fontSize: 13, color: "var(--ink3)", marginTop: 4 }}>{dayLabel(today())}</div>
+          {ui.homeTitle && (
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink2)", marginTop: 2 }}>{ui.homeTitle}</div>
           )}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
-          <IconBtn title={cloudSyncState === "syncing" ? "Menyinkronkan…" : cloudSyncState === "ok" ? "Data diperbarui dari awan" : "Muat ulang dari awan"} onClick={onCloudSync}>
-            {cloudSyncState === "syncing" ? <Loader2 size={20} className="animate-spin" /> : cloudSyncState === "ok" ? <Check size={20} color="var(--in-text)" /> : <Cloud size={20} />}
+        <div style={{ display: "flex", alignItems: "center", gap: 2, flexShrink: 0 }}>
+          <IconBtn
+            variant={cloudSyncState === "syncing" ? "syncing" : cloudSyncState === "ok" ? "ok" : cloudSyncState === "err" ? "err" : undefined}
+            disabled={cloudSyncState === "syncing"}
+            title={
+              cloudSyncState === "syncing" ? "Menyinkronkan…"
+                : cloudSyncState === "ok" ? "Sync berhasil"
+                  : cloudSyncState === "err" ? "Sync gagal — tap lagi"
+                    : "Muat ulang dari awan"
+            }
+            onClick={onCloudSync}
+          >
+            {cloudSyncState === "syncing" ? <Loader2 size={20} className="animate-spin" />
+              : cloudSyncState === "ok" ? <Check size={20} />
+                : cloudSyncState === "err" ? <X size={20} />
+                  : <Cloud size={20} />}
           </IconBtn>
           {canDo(user.role, "inputIncome") && (
             <IconBtn title="Inbox draf bank/e-wallet" onClick={() => setOverlay("inbox")} badge={inboxCount}><Inbox size={20} /></IconBtn>
@@ -1027,11 +1304,14 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
         </div>
       </div>
 
+      <SyncStatusStrip syncInfo={syncInfo} realtimeLive={realtimeLive} cloudSyncState={cloudSyncState} syncHint={syncInfo?.hint} />
+
       <BusinessContextBanner
         business={business}
         businesses={businesses}
         switchBusiness={switchBusiness}
         features={features}
+        user={user}
       />
 
       {/* saldo card */}
@@ -1043,8 +1323,15 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
             <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase", opacity: .8 }}>TOTAL SALDO</span>
             <button onClick={() => setHide(v => !v)} style={{ background: "none", border: "none", color: "rgba(255,255,255,.85)", cursor: "pointer" }}>{hide ? <EyeOff size={20} /> : <Eye size={20} />}</button>
           </div>
-          <div className="money" style={{ fontSize: 38, fontWeight: 800, marginTop: 8, position: "relative" }}>{hide ? "••••••••" : fmtMoney(totalSaldo, cur)}</div>
-          <div style={{ fontSize: 13, opacity: .7, marginTop: 4, position: "relative" }}>{scopeLabel} · {new Date().toLocaleDateString("id-ID", { month: "long", year: "numeric" })}</div>
+          <div className="money" style={{ fontSize: 38, fontWeight: 800, marginTop: 8, position: "relative" }}>
+            {hide ? "••••••••" : purchasingSaldo ? purchasingSaldo.primary : fmtMoney(totalSaldo, cur)}
+          </div>
+          {purchasingSaldo?.secondary && !hide && (
+            <div style={{ fontSize: 12, opacity: .92, marginTop: 8, lineHeight: 1.45, position: "relative", maxWidth: 320 }}>
+              {purchasingSaldo.secondary}
+            </div>
+          )}
+          <div style={{ fontSize: 13, opacity: .7, marginTop: purchasingSaldo?.secondary ? 8 : 4, position: "relative" }}>{scopeLabel} · {new Date().toLocaleDateString("id-ID", { month: "long", year: "numeric" })}</div>
           <div style={{ height: 1, background: "rgba(255,255,255,.2)", margin: "16px 0", position: "relative" }} />
           <div style={{ display: "flex", justifyContent: "space-between", position: "relative" }}>
             <div><div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, opacity: .8 }}><span style={{ width: 8, height: 8, borderRadius: 99, background: "#4ADE80", display: "inline-block" }} />Pemasukan</div><div className="money" style={{ fontSize: 18, fontWeight: 700, marginTop: 4 }}>{hide ? "••••" : fmtMoney(monthIn, cur, "+")}</div></div>
@@ -1061,24 +1348,70 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
         )}
       </div>
       <div style={{ paddingLeft: 16, display: "flex", gap: 12, overflowX: "auto", paddingBottom: 4, paddingRight: 16, marginBottom: 24 }} className="scroll-hide">
-        {myWallets.map(w => {
+        {orderedWallets.length === 0 && user.role === "purchasing" && (
+          <Card style={{ minWidth: 260, padding: 16, background: "var(--surface2)", border: "1px dashed var(--line)" }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ink)" }}>Belum ada dompet belanja</div>
+            <div style={{ fontSize: 12, color: "var(--ink3)", marginTop: 6, lineHeight: 1.45 }}>
+              Minta Owner/Admin aktifkan Dana Darurat / Uang Makan / Parkir untuk purchasing (centang Pakai belanja).
+            </div>
+          </Card>
+        )}
+        {orderedWallets.map(w => {
           const bal = walletBalance(w.id, s.wallets, s.transactions);
-          const floorHint = !isPaylaterWallet(w) ? walletFloorHint(bal, w.floor) : null;
+          const laciWarn = isLaciOutletWallet(w) && bal < (w.floor ?? LACI_FLOOR);
+          const floorHint = !isPaylaterWallet(w) && !laciWarn ? walletFloorHint(bal, w.floor) : null;
           const nearFloor = !!floorHint;
           const paylaterDebt = isPaylaterWallet(w) && bal < 0;
           const balHidden = shouldHideWalletBalance(w, user);
+          const laciPres = laciWarn ? laciBalancePresentation(bal, fmtMoney, cur, w.floor) : null;
           return (
-            <Card key={w.id} style={{ minWidth: 150, padding: 16, position: "relative", overflow: "hidden", flexShrink: 0, border: paylaterDebt ? "1px solid #FDE68A" : undefined }}>
+            <Card
+              key={w.id}
+              onClick={() => onOpenWalletHistory?.(w.id)}
+              style={{
+                minWidth: 152,
+                minHeight: 120,
+                padding: 16,
+                position: "relative",
+                overflow: "hidden",
+                flexShrink: 0,
+                border: paylaterDebt ? "1px solid #FDE68A" : undefined,
+                display: "flex",
+                flexDirection: "column",
+                cursor: "pointer",
+              }}
+            >
               <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: w.color }} />
               <div style={{ marginBottom: 12 }}><WalletIcon wallet={w} size={40} /></div>
               <div style={{ fontSize: 12, color: "var(--ink2)", display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
-                {w.name}
+                {foodWalletDisplayName(w)}
                 {isPaylaterWallet(w) && <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 99, background: "#FEF3C7", color: "#B45309", fontWeight: 800 }}>Hutang</span>}
                 {balHidden && <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 99, background: "var(--surface2)", color: "var(--ink3)", fontWeight: 700 }}>Rekening</span>}
                 {w.outlet && <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 99, background: "var(--brand-soft)", color: "var(--brand)", fontWeight: 700 }}>{w.outlet}</span>}
               </div>
               {balHidden ? (
                 <div style={{ fontSize: 13, color: "var(--ink3)", marginTop: 6, fontWeight: 600 }}>Saldo disembunyikan</div>
+              ) : user.role === "purchasing" && isKasKecilWalletDisplay(w) ? (
+                <>
+                  <div className="money" style={{ fontSize: 17, fontWeight: 700, color: bal < 0 ? "var(--ink2)" : nearFloor ? "var(--out-text)" : "var(--ink)", marginTop: 2 }}>
+                    {hide ? "•••" : formatWalletBal(w, bal, cur, user)}
+                  </div>
+                  {bal < 0 && !hide && (
+                    <div style={{ fontSize: 10, color: "var(--ink3)", marginTop: 4, lineHeight: 1.35 }}>Minta top-up admin</div>
+                  )}
+                </>
+              ) : laciWarn ? (
+                <>
+                  <div className="money" style={{ fontSize: 17, fontWeight: 700, color: "var(--out-text)", marginTop: 2 }}>
+                    {hide ? "•••" : laciPres.primary}
+                  </div>
+                  {!hide && (
+                    <>
+                      <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: 3, lineHeight: 1.35 }}>{laciPres.secondary}</div>
+                      <div className="money" style={{ fontSize: 11, color: "var(--ink3)", marginTop: 4 }}>{fmtMoney(bal, cur)}</div>
+                    </>
+                  )}
+                </>
               ) : (
                 <div className="money" style={{ fontSize: 17, fontWeight: 700, color: paylaterDebt ? "#B45309" : nearFloor ? "var(--out-text)" : bal < 0 ? "var(--out-text)" : "var(--ink)", marginTop: 2 }}>{hide ? "•••" : formatWalletBal(w, bal, cur, user)}</div>
               )}
@@ -1088,6 +1421,86 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
           );
         })}
       </div>
+
+      {/* Dompet bersama FNB (Uang NF, PayLater) + rekening Sam — saldo dari FNB. */}
+      {(() => {
+        if (features?.isFnB || !canWriteSharedBank(user?.role)) return null;
+        const links = Array.isArray(s.walletSetup?.sharedLinks)
+          ? s.walletSetup.sharedLinks.filter((l) => l.enabled)
+          : [];
+        if (!links.length) return null;
+        const isPurchasing = user?.role === "purchasing";
+        const opsLinks = links.filter((l) => l.linkKind === "ops_share");
+        const bankLinks = links.filter((l) => l.linkKind !== "ops_share");
+
+        const renderSharedCard = (link, { showBalance, accent, canOpenHistory }) => {
+          const m = sharedMirror?.[sharedWalletId(link)];
+          const label = link.label || link.sourceWalletName || "Dompet";
+          const isPaylater = link.sourceWalletType === "paylater";
+          const virtualId = sharedWalletId(link);
+          return (
+            <Card
+              key={link.id}
+              onClick={canOpenHistory ? () => onOpenWalletHistory?.(virtualId) : undefined}
+              style={{ minWidth: 152, minHeight: 120, padding: 16, position: "relative", overflow: "hidden", flexShrink: 0, display: "flex", flexDirection: "column", opacity: 0.96, cursor: canOpenHistory ? "pointer" : "default" }}
+            >
+              <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: accent || (isPaylater ? "#B45309" : "#DC2626") }} />
+              <div style={{ marginBottom: 10, fontSize: 26 }}>{isPaylater ? "💳" : link.linkKind === "ops_share" ? "👛" : "🔗"}</div>
+              <div style={{ fontSize: 12, color: "var(--ink2)", display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                {label}
+                {isPaylater && <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 99, background: "#FEF3C7", color: "#B45309", fontWeight: 800 }}>Hutang</span>}
+                <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 99, background: "var(--surface2)", color: "var(--ink3)", fontWeight: 700 }}>Bersama</span>
+              </div>
+              {showBalance ? (
+                <>
+                  <div className="money" style={{ fontSize: 17, fontWeight: 700, color: isPaylater && m?.balance < 0 ? "#B45309" : "var(--ink)", marginTop: 2 }}>
+                    {hide ? "•••" : m ? (m.missing ? "—" : m.hidden ? "•••" : fmtMoney(m.balance, cur)) : "…"}
+                  </div>
+                  <div style={{ fontSize: 10, color: "var(--ink3)", fontWeight: 700, marginTop: 3 }}>
+                    {m?.missing ? "Saldo tak terbaca" : "Satu saldo · FNB & NF"}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "var(--ink3)", marginTop: 6 }}>Saldo disembunyikan</div>
+                  <div style={{ fontSize: 10, color: "var(--ink3)", fontWeight: 700, marginTop: 3 }}>Hanya catat pengeluaran</div>
+                </>
+              )}
+            </Card>
+          );
+        };
+
+        return (
+          <>
+            {opsLinks.length > 0 && (
+              <>
+                <div style={{ padding: "0 20px", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                  <span style={{ fontSize: 17, fontWeight: 700, color: "var(--ink)" }}>Dompet bersama</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "var(--ink3)" }}>Uang NF & PayLater · FNB</span>
+                </div>
+                <div style={{ paddingLeft: 16, display: "flex", gap: 12, overflowX: "auto", paddingBottom: 4, paddingRight: 16, marginBottom: 24 }} className="scroll-hide">
+                  {opsLinks.map((link) => renderSharedCard(link, { showBalance: true, accent: link.color, canOpenHistory: true }))}
+                </div>
+              </>
+            )}
+            {bankLinks.length > 0 && (
+              <>
+                <div style={{ padding: "0 20px", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                  <span style={{ fontSize: 17, fontWeight: 700, color: "var(--ink)" }}>Rekening Sam terhubung</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "var(--ink3)" }}>
+                    {isPurchasing ? "Catat keluar · tanpa lihat saldo" : "Saldo FNB · masuk & keluar"}
+                  </span>
+                </div>
+                <div style={{ paddingLeft: 16, display: "flex", gap: 12, overflowX: "auto", paddingBottom: 4, paddingRight: 16, marginBottom: 24 }} className="scroll-hide">
+                  {bankLinks.map((link) =>
+                    renderSharedCard(link, { showBalance: !isPurchasing, accent: "#6B7280", canOpenHistory: true })
+                  )}
+                </div>
+              </>
+            )}
+          </>
+        );
+      })()}
 
       {/* Checklist harian — semua role */}
       {(() => {
@@ -1146,13 +1559,16 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
         }
 
         if (role === "purchasing" && features.purchasingModule) {
+          const kasKecilBal = walletBalance("w_kas_kecil", s.wallets, s.transactions);
           const tasks = [
             {
               id: "belanja",
               title: "Catat Belanja Hari Ini",
               subtitle: todayOutTx.length
                 ? `${todayOutTx.length} transaksi · total ${fmtMoney(todayOutTotal, cur)}`
-                : "Belum ada belanja tercatat — tap untuk catat pengeluaran",
+                : kasKecilBal < 0
+                  ? "Dana Kas Kecil habis — minta admin transfer"
+                  : "Belum ada belanja tercatat — tap untuk catat pengeluaran",
               done: todayOutTx.length > 0,
               onClick: () => onCatat?.(),
             },
@@ -1174,6 +1590,33 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
           );
         }
 
+        if (role === "purchasing" && !features.purchasingModule) {
+          const primaryWallet = areaWallet || myWallets.find((w) => w.purchasingUse) || myWallets[0];
+          const saldoHint = primaryWallet
+            ? walletBalance(primaryWallet.id, s.wallets, s.transactions)
+            : 0;
+          const tasks = [
+            {
+              id: "belanja",
+              title: "Catat Belanja Hari Ini",
+              subtitle: todayOutTx.length
+                ? `${todayOutTx.length} transaksi · total ${fmtMoney(todayOutTotal, cur)}`
+                : saldoHint <= 0
+                  ? "Saldo dompet habis — minta admin keuangan transfer"
+                  : "Belum ada belanja tercatat — tap untuk catat pengeluaran",
+              done: todayOutTx.length > 0,
+              onClick: () => onCatat?.(),
+            },
+          ];
+          return (
+            <RoleDailyChecklist
+              tasks={tasks}
+              accentGradient={ui.saldoGradient}
+              headerHint={`Dompet: ${primaryWallet?.name || "hubungi admin"}`}
+            />
+          );
+        }
+
         if ((role === "admin" || role === "owner") && features.settleLaci) {
           const tasks = [
             {
@@ -1181,10 +1624,12 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
               title: "Verifikasi Laporan Kasir",
               subtitle: awaitingVerify.length
                 ? `${awaitingVerify.length} laporan · cek fisik laci & nota pagi`
-                : "Semua laporan sudah diverifikasi",
-              done: awaitingVerify.length === 0,
-              urgent: awaitingVerify.length > 0,
-              count: awaitingVerify.length || undefined,
+                : missingOmsetToday.length
+                  ? `${missingOmsetToday.map(o => OUTLET_LABEL[o] || o).join(", ")} belum kirim omset hari ini`
+                  : "Semua laporan sudah diverifikasi",
+              done: awaitingVerify.length === 0 && missingOmsetToday.length === 0,
+              urgent: awaitingVerify.length > 0 || missingOmsetToday.length > 0,
+              count: awaitingVerify.length || missingOmsetToday.length || undefined,
               onClick: () => setOverlay("settleLaporan"),
             },
             {
@@ -1192,10 +1637,12 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
               title: "Settle Laporan Omset",
               subtitle: readyToSettle.length
                 ? `${readyToSettle.length} siap settle · batas ${reportSettleDeadlineLabel(readyToSettle[0]?.date) || "esok 17:00"}`
-                : waitingSettle.length === 0
-                  ? "Semua laporan omset sudah disettle"
-                  : "Verifikasi dulu sebelum settle",
-              done: waitingSettle.length === 0,
+                : missingOmsetToday.length
+                  ? `Tunggu omset ${missingOmsetToday.map(o => OUTLET_LABEL[o] || o).join(", ")}`
+                  : waitingSettle.length === 0
+                    ? "Semua laporan omset sudah disettle"
+                    : "Verifikasi dulu sebelum settle",
+              done: waitingSettle.length === 0 && missingOmsetToday.length === 0,
               urgent: readyToSettle.length > 0 || overdueSettle > 0,
               count: readyToSettle.length || undefined,
               onClick: () => setOverlay("settleLaporan"),
@@ -1253,7 +1700,7 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
               tasks={tasks}
               accentGradient={ui.saldoGradient}
               headerLabel={role === "owner" ? "Prioritas Owner" : "Prioritas Admin Keuangan"}
-              headerHint="Verifikasi pagi · settle siang s/d esok 17:00 · yang terlambat berkedip"
+              headerHint="Verifikasi pagi · settle s/d esok 17:00"
             />
           );
         }
@@ -1325,7 +1772,7 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
                     <div style={{ fontWeight: 600, color: "var(--ink)", fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {isTrf ? `${s.wallets.find(x => x.id === t.fromWalletId)?.name} → ${s.wallets.find(x => x.id === t.toWalletId)?.name}` : (isPurchasingTx(t) ? purchasingTxTitle(t) : (t.desc || cat?.name))}
                     </div>
-                    <div style={{ fontSize: 12, color: "var(--ink3)", marginTop: 2 }}>{isTrf ? "Geser laci" : cat?.name} · {w?.name} · {shortDate(t.date)}</div>
+                    <div style={{ fontSize: 12, color: "var(--ink3)", marginTop: 2 }}>{isTrf ? "Geser laci" : cat?.name} · {foodWalletDisplayName(w)} · {shortDate(t.date)}</div>
                   </div>
                   <div className="money" style={{ fontSize: 14, fontWeight: 700, color: col, flexShrink: 0 }}>
                     {hide ? "•••" : (isTrf ? "⇄ " : "") + (isTrf ? fmtMoney(t.amount, cur) : fmtTxAmount(t.amount, t.type, cur))}
@@ -1340,9 +1787,32 @@ function Beranda({ s, setTab, setOverlay, onOpenLaporan, hide, setHide, onCloudS
   );
 }
 
-function IconBtn({ children, onClick, badge, title }) {
+function IconBtn({ children, onClick, badge, title, variant, disabled }) {
+  const tone = variant === "syncing"
+    ? { bg: "var(--brand-soft)", border: "var(--brand)", color: "var(--brand)" }
+    : variant === "ok"
+      ? { bg: "#ECFDF5", border: "#A7F3D0", color: "var(--in-text)" }
+      : variant === "err"
+        ? { bg: "#FEF2F2", border: "#FECACA", color: "#B91C1C" }
+        : null;
   return (
-    <button onClick={onClick} title={title} style={{ width: 38, height: 38, borderRadius: 99, background: "none", border: "none", cursor: "pointer", display: "grid", placeItems: "center", color: "var(--ink2)", position: "relative" }}>
+    <button
+      onClick={onClick}
+      title={title}
+      disabled={disabled}
+      style={{
+        width: 38, height: 38, borderRadius: 99,
+        background: tone?.bg || "none",
+        border: tone ? `1.5px solid ${tone.border}` : "none",
+        cursor: disabled ? "wait" : "pointer",
+        display: "grid", placeItems: "center",
+        color: tone?.color || "var(--ink2)",
+        position: "relative",
+        transform: variant === "syncing" ? "scale(0.94)" : "scale(1)",
+        transition: "transform .12s ease, background .2s ease, border-color .2s ease",
+        opacity: disabled ? 0.85 : 1,
+      }}
+    >
       {children}
       {badge > 0 && <span style={{ position: "absolute", top: 4, right: 4, minWidth: 16, height: 16, borderRadius: 99, background: "var(--out)", color: "#fff", fontSize: 10, fontWeight: 700, display: "grid", placeItems: "center", padding: "0 3px" }}>{badge}</span>}
     </button>
@@ -1350,15 +1820,19 @@ function IconBtn({ children, onClick, badge, title }) {
 }
 
 // ─── Laporan ───────────────────────────────────────────────
-function Laporan({ s, mutate, onOpenPair, onOpenPurchasingReport, business, features }) {
+function Laporan({ s, mutate, onOpenPair, onOpenPurchasingReport, business, features, webMode, sharedTxByWallet }) {
   const cur = s.profile.currency;
   const user = s.currentUser || { role: "kasir" };
   const role = user.role || "kasir";
   const canManageTx = canManageTransactions(user.role);
   const [editTx, setEditTx] = useState(null);
-  const showExport = canDo(user.role, "hubungkanWeb");
-  const myWallets = visibleWallets(s.wallets, user);
-  const scopedBase = visibleTransactionsForBusiness(s.transactions, s.wallets, user, business);
+  const canExport = canDo(user.role, "hubungkanWeb");
+  const [exporting, setExporting] = useState(null);
+  const myWallets = visibleWalletsForBusiness(s.wallets, user, business);
+  const scopedBase = useMemo(() => {
+    const local = visibleTransactionsForBusiness(s.transactions, s.wallets, user, business);
+    return mergeWithLocalTransactions(local, sharedTxByWallet);
+  }, [s.transactions, s.wallets, user, business, sharedTxByWallet]);
   const [range, setRange] = useState("Harian");
   const [anchorDate, setAnchorDate] = useState(today());
   const [customStart, setCustomStart] = useState(isoOffset(-6));
@@ -1366,6 +1840,7 @@ function Laporan({ s, mutate, onOpenPair, onOpenPurchasingReport, business, feat
   const [walletId, setWalletId] = useState("all");
   const [catIn, setCatIn] = useState("all");
   const [catOut, setCatOut] = useState("all");
+  const [isPressingPurchasing, setIsPressingPurchasing] = useState(false);
 
   const bounds = useMemo(
     () => getPeriodBounds(range, anchorDate, { customStart, customEnd }),
@@ -1405,8 +1880,8 @@ function Laporan({ s, mutate, onOpenPair, onOpenPurchasingReport, business, feat
   };
   const canGoNext = bounds.end < today();
 
-  const inCats = visibleCategories(s.categories, user, "in");
-  const outCats = visibleCategories(s.categories, user, "out");
+  const inCats = visibleCategoriesForBusiness(s.categories, user, "in", business);
+  const outCats = visibleCategoriesForBusiness(s.categories, user, "out", business);
 
   const txDetail = useMemo(
     () => filterTransactions(scopedBase, {
@@ -1441,6 +1916,28 @@ function Laporan({ s, mutate, onOpenPair, onOpenPurchasingReport, business, feat
     scopeLabel,
   }), [periodLabel, inSum, outSum, net, count, scopeLabel]);
 
+  const businessLabel = resolveBusinessDisplayName(business) || s.profile?.name || "NF3";
+
+  const handleExport = async (type) => {
+    if (!txSorted.length) {
+      showActionToast("Tidak ada transaksi pada periode ini.", "error");
+      return;
+    }
+    setExporting(type);
+    try {
+      if (type === "csv") {
+        exportKeuanganCsv(txSorted, s.categories, s.wallets, bounds, periodLabel, businessLabel);
+      } else {
+        await exportKeuanganPdf(txSorted, s.categories, s.wallets, bounds, periodLabel, businessLabel);
+      }
+      showActionToast(type === "csv" ? "File Excel (CSV) diunduh." : "File PDF diunduh.", "success");
+    } catch (e) {
+      showActionToast(e.message || "Gagal export", "error");
+    } finally {
+      setExporting(null);
+    }
+  };
+
   return (
     <div style={{ padding: "0 0 90px" }}>
       <div style={{ padding: "16px 20px 12px" }}>
@@ -1449,23 +1946,111 @@ function Laporan({ s, mutate, onOpenPair, onOpenPurchasingReport, business, feat
 
       {(role === "purchasing" || canDo(role, "kelolaKategoriSemua")) && features?.purchasingModule && (
         <div style={{ margin: "0 16px 12px" }}>
-          <Card onClick={onOpenPurchasingReport} style={{ padding: "12px 14px", background: "#FEF3C7", border: "1px solid #FDE68A", cursor: "pointer" }}>
-            <div style={{ fontWeight: 500, color: "var(--ink)" }}>Laporan Purchasing</div>
-            <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>Pengeluaran belanja per outlet & periode</div>
+          <Card
+            onClick={onOpenPurchasingReport}
+            onMouseDown={() => setIsPressingPurchasing(true)}
+            onMouseUp={() => setIsPressingPurchasing(false)}
+            onMouseLeave={() => setIsPressingPurchasing(false)}
+            onTouchStart={() => setIsPressingPurchasing(true)}
+            onTouchEnd={() => setIsPressingPurchasing(false)}
+            onTouchCancel={() => setIsPressingPurchasing(false)}
+            style={{
+              padding: "13px 14px",
+              background: "#FEF3C7",
+              border: "1px solid #F59E0B",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              transform: isPressingPurchasing ? "scale(0.985)" : "scale(1)",
+              boxShadow: isPressingPurchasing ? "0 1px 1px rgba(146,64,14,.12)" : "0 3px 10px rgba(146,64,14,.08)",
+              transition: "transform .12s ease, box-shadow .16s ease",
+            }}
+          >
+            <div style={{ width: 32, height: 32, borderRadius: 10, display: "grid", placeItems: "center", background: "#FFFBEB", border: "1px solid #F59E0B", flexShrink: 0 }}>
+              <BarChart3 size={16} color="#92400E" />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#92400E" }}>Laporan Purchasing</div>
+              <div style={{ fontSize: 12, color: "#6B7280", marginTop: 2 }}>Pengeluaran belanja per outlet & periode</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#92400E", marginTop: 5 }}>Tap untuk buka laporan</div>
+            </div>
+            <div
+              style={{
+                width: 30,
+                height: 30,
+                borderRadius: 99,
+                display: "grid",
+                placeItems: "center",
+                border: "1px solid #F59E0B",
+                background: "#FFFBEB",
+                flexShrink: 0,
+              }}
+            >
+              <ChevronRight size={16} color="#92400E" />
+            </div>
           </Card>
         </div>
       )}
 
-      {showExport && (
+      {canExport && (
         <div style={{ margin: "0 16px 16px" }}>
-          <Card onClick={onOpenPair} style={{ padding: "12px 14px", background: "#F0FDF4", border: "1px solid #BBF7D0", display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-            <Monitor size={20} color="#16A34A" />
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#16A34A" }}>Export PDF & Excel lengkap via PC</div>
-              <div style={{ fontSize: 12, color: "#4B5563" }}>Tap untuk hubungkan Web Dashboard NF3</div>
+          {webMode ? (
+            <Card style={{ padding: "14px 16px", background: "#F0FDF4", border: "1px solid #86EFAC" }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#15803D", marginBottom: 10 }}>Export laporan keuangan</div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button type="button" disabled={!!exporting} onClick={() => handleExport("pdf")}
+                  style={{ flex: 1, minWidth: 140, padding: "12px 16px", borderRadius: 12, border: "none", background: "#16A34A", color: "#fff", fontWeight: 700, fontSize: 14, cursor: exporting ? "wait" : "pointer", opacity: exporting && exporting !== "pdf" ? 0.6 : 1 }}>
+                  {exporting === "pdf" ? "Membuat PDF…" : "Unduh PDF"}
+                </button>
+                <button type="button" disabled={!!exporting} onClick={() => handleExport("csv")}
+                  style={{ flex: 1, minWidth: 140, padding: "12px 16px", borderRadius: 12, border: "1px solid #86EFAC", background: "#fff", color: "#15803D", fontWeight: 700, fontSize: 14, cursor: exporting ? "wait" : "pointer", opacity: exporting && exporting !== "csv" ? 0.6 : 1 }}>
+                  {exporting === "csv" ? "Mengekspor…" : "Unduh Excel (CSV)"}
+                </button>
+              </div>
+              <div style={{ fontSize: 11, color: "#4B5563", marginTop: 8, lineHeight: 1.4 }}>
+                {txSorted.length} transaksi pada periode ini · filter dompet/kategori ikut diterapkan.
+              </div>
+            </Card>
+          ) : (
+          <Card
+            onClick={onOpenPair}
+            style={{
+              padding: "13px 14px",
+              background: "#F0FDF4",
+              border: "1px solid #86EFAC",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              cursor: "pointer",
+            }}
+          >
+            <div style={{ width: 32, height: 32, borderRadius: 10, display: "grid", placeItems: "center", background: "#ECFDF5", border: "1px solid #86EFAC", flexShrink: 0 }}>
+              <Monitor size={16} color="#15803D" />
             </div>
-            <ChevronRight size={16} color="var(--ink3)" />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#15803D" }}>Export PDF & Excel</div>
+              <div style={{ fontSize: 12, color: "#4B5563", marginTop: 2 }}>Unduh langsung di bawah, atau hubungkan PC</div>
+            </div>
+            <ChevronRight size={16} color="#15803D" />
           </Card>
+          )}
+          {!webMode && (
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <button type="button" disabled={!!exporting} onClick={() => handleExport("pdf")}
+                style={{ flex: 1, padding: "11px 12px", borderRadius: 12, border: "none", background: "#16A34A", color: "#fff", fontWeight: 700, fontSize: 13, cursor: exporting ? "wait" : "pointer" }}>
+                {exporting === "pdf" ? "PDF…" : "PDF"}
+              </button>
+              <button type="button" disabled={!!exporting} onClick={() => handleExport("csv")}
+                style={{ flex: 1, padding: "11px 12px", borderRadius: 12, border: "1px solid #86EFAC", background: "#fff", color: "#15803D", fontWeight: 700, fontSize: 13, cursor: exporting ? "wait" : "pointer" }}>
+                {exporting === "csv" ? "CSV…" : "Excel"}
+              </button>
+              <button type="button" onClick={onOpenPair}
+                style={{ padding: "11px 14px", borderRadius: 12, border: "1px solid #86EFAC", background: "#ECFDF5", color: "#15803D", fontWeight: 600, fontSize: 12, cursor: "pointer" }}>
+                PC
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1516,46 +2101,23 @@ function Laporan({ s, mutate, onOpenPair, onOpenPurchasingReport, business, feat
         </div>
       )}
 
-      <div style={{ padding: "6px 16px", display: "flex", gap: 8, overflowX: "auto" }} className="scroll-hide">
+      <FilterChipRow label="Dompet">
         <Pill active={walletId === "all"} onClick={() => setWalletId("all")}>Semua dompet</Pill>
         {myWallets.map(w => <Pill key={w.id} active={walletId === w.id} onClick={() => setWalletId(w.id)} color={w.color}>{w.name}</Pill>)}
-      </div>
-      <div style={{ padding: "6px 16px", display: "flex", gap: 8, overflowX: "auto" }} className="scroll-hide">
-        <span style={{ fontSize: 11, fontWeight: 700, color: "var(--ink3)", alignSelf: "center", flexShrink: 0 }}>Masuk</span>
+      </FilterChipRow>
+      <FilterChipRow label="Masuk">
         <Pill active={catIn === "all"} onClick={() => setCatIn("all")}>Semua</Pill>
         {inCats.map(c => <Pill key={c.id} active={catIn === c.id} onClick={() => setCatIn(c.id)}>{c.name}</Pill>)}
-      </div>
-      <div style={{ padding: "6px 16px 12px", display: "flex", gap: 8, overflowX: "auto" }} className="scroll-hide">
-        <span style={{ fontSize: 11, fontWeight: 700, color: "var(--ink3)", alignSelf: "center", flexShrink: 0 }}>Keluar</span>
+      </FilterChipRow>
+      <FilterChipRow label="Keluar" style={{ paddingBottom: 12 }}>
         <Pill active={catOut === "all"} onClick={() => setCatOut("all")}>Semua</Pill>
         {outCats.map(c => <Pill key={c.id} active={catOut === c.id} onClick={() => setCatOut(c.id)}>{c.name}</Pill>)}
-      </div>
+      </FilterChipRow>
 
       <div style={{ padding: "0 16px" }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink2)", marginBottom: 8 }}>Tren Alur Kas (Pemasukan vs Pengeluaran)</div>
         <Card style={{ padding: "12px 8px 4px" }}>
-          {chart.every(p => p.in === 0 && p.out === 0) ? (
-            <div style={{ height: 180, display: "grid", placeItems: "center", color: "var(--ink3)", fontSize: 13, textAlign: "center", padding: 16 }}>
-              Tidak ada transaksi pada periode ini.
-            </div>
-          ) : (
-            <div style={{ height: 180 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chart} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="gi" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#22C55E" stopOpacity={.35} /><stop offset="100%" stopColor="#22C55E" stopOpacity={0} /></linearGradient>
-                    <linearGradient id="go" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#EF4444" stopOpacity={.3} /><stop offset="100%" stopColor="#EF4444" stopOpacity={0} /></linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" vertical={false} />
-                  <XAxis dataKey="day" tick={{ fontSize: 10, fill: "var(--ink3)" }} axisLine={false} tickLine={false} interval={chart.length > 14 ? Math.floor(chart.length / 7) : 0} />
-                  <YAxis tick={{ fontSize: 10, fill: "var(--ink3)" }} axisLine={false} tickLine={false} width={38} tickFormatter={v => v >= 1000000 ? v / 1000000 + "jt" : v >= 1000 ? v / 1000 + "k" : v} />
-                  <Tooltip formatter={(v, n) => [fmtMoney(v, cur), n === "in" ? "Masuk" : "Keluar"]} labelFormatter={(_, payload) => payload?.[0]?.payload?.iso ? dayLabel(payload[0].payload.iso) : ""} contentStyle={{ borderRadius: 10, border: "1px solid var(--line)", fontSize: 12, background: "var(--surface)" }} />
-                  <Area type="monotone" dataKey="in" stroke="#22C55E" strokeWidth={2} fill="url(#gi)" />
-                  <Area type="monotone" dataKey="out" stroke="#EF4444" strokeWidth={2} fill="url(#go)" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          )}
+          <CashflowChart chart={chart} cur={cur} fmtMoney={fmtMoney} dayLabel={dayLabel} />
         </Card>
       </div>
 
@@ -1622,9 +2184,13 @@ function Laporan({ s, mutate, onOpenPair, onOpenPurchasingReport, business, feat
                             ? `${fromW?.name || "—"} → ${toW?.name || "—"}`
                             : isPurchasingTx(t)
                               ? `${purchasingTxSubtitle(t, cat, w)}`
-                              : `${cat?.name || "—"} · ${w?.name || "—"}`}
+                              : `${cat?.name || "—"} · ${foodWalletDisplayName(w)}`}
                           {" · "}{shortDate(t.date)}
-                          {t.source && <span> · {t.source}</span>}
+                          {t.source && (
+                            <span style={t.source === "Sesuaikan Saldo" ? { color: "var(--out-text)", fontWeight: 700 } : undefined}>
+                              {" · "}{t.source === "Sesuaikan Saldo" ? "Penyesuaian manual (recovery)" : t.source}
+                            </span>
+                          )}
                         </div>
                         {canManageTx && policy && !policy.canEdit && (
                           <div style={{ fontSize: 11, color: "var(--amber)", marginTop: 4 }}>Terkunci — {policy.reason}</div>
@@ -1668,6 +2234,7 @@ function Laporan({ s, mutate, onOpenPair, onOpenPurchasingReport, business, feat
               const i = st.transactions.findIndex((t) => t.id === id);
               if (i >= 0) st.transactions[i] = normalizeTransaction({ ...st.transactions[i], ...patch });
             });
+            scheduleImmediateSave({ critical: true });
             showActionToast("Perubahan transaksi disimpan.", "success");
             setEditTx(null);
             return true;
@@ -1681,6 +2248,7 @@ function Laporan({ s, mutate, onOpenPair, onOpenPurchasingReport, business, feat
             mutate((st) => {
               applyTransactionDelete(st, id);
             });
+            scheduleImmediateSave({ critical: true });
             showActionToast("Transaksi dihapus · saldo dompet sudah disesuaikan.", "success");
             setEditTx(null);
             return true;
@@ -2013,7 +2581,7 @@ function Analisis({ s, hideInsight }) {
 }
 
 // ─── Catat Transaksi ───────────────────────────────────────
-const MAX_SCAN_NOTA = 4;
+const MAX_SCAN_NOTA = 10;
 const scanNotaStorageKey = (bizId, userId) => `nf3_scan_nota_${bizId || "local"}_${userId || "anon"}_${today()}`;
 
 function getScanNotaUsed(bizId, userId) {
@@ -2027,7 +2595,7 @@ function bumpScanNotaUsed(bizId, userId) {
   return next;
 }
 
-function CatatTransaksi({ s, bizId, onSave, onClose }) {
+function CatatTransaksi({ s, bizId, mutate, onSave, onNotify, onClose, business }) {
   const role = s.currentUser?.role || "kasir";
   const isKasir = role === "kasir";
   const expenseOnly = isKasir || role === "purchasing";
@@ -2047,9 +2615,9 @@ function CatatTransaksi({ s, bizId, onSave, onClose }) {
     try {
       const r = await aiParseText(text, s.categories);
       const txType = expenseOnly ? "out" : r.type;
-      const cats = visibleCategories(s.categories, s.currentUser, txType);
+      const cats = visibleCategoriesForBusiness(s.categories, s.currentUser, txType, business);
       const cat = cats.find(c => c.name.toLowerCase() === (r.category || "").toLowerCase()) || cats[0];
-      const myW = visibleWallets(s.wallets, s.currentUser);
+      const myW = visibleWalletsForBusiness(s.wallets, s.currentUser, business);
       setDraft({ type: txType, categoryId: cat?.id, amount: r.amount, desc: r.desc, walletId: myW[0]?.id, date: today(), source: text });
     } catch { setErr("Gagal memahami. Coba lagi."); }
     setBusy(false);
@@ -2076,9 +2644,9 @@ function CatatTransaksi({ s, bizId, onSave, onClose }) {
       const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = rej; r.readAsDataURL(f); });
       const r = await aiParseReceipt(b64, f.type, s.categories);
       const txType = expenseOnly ? "out" : (r.type || "out");
-      const cats = visibleCategories(s.categories, s.currentUser, txType);
+      const cats = visibleCategoriesForBusiness(s.categories, s.currentUser, txType, business);
       const cat = cats.find(c => c.name.toLowerCase() === (r.category || "").toLowerCase()) || cats[0];
-      const myW = visibleWallets(s.wallets, s.currentUser);
+      const myW = visibleWalletsForBusiness(s.wallets, s.currentUser, business);
       setScanUsed(bumpScanNotaUsed(bizId, userId));
       setDraft({ type: txType, categoryId: cat?.id, amount: r.amount, desc: r.desc, walletId: myW[0]?.id, date: r.date || today(), source: "Scan nota" });
     } catch { setErr("Nota tidak terbaca. Coba foto ulang."); }
@@ -2111,8 +2679,8 @@ function CatatTransaksi({ s, bizId, onSave, onClose }) {
         </Card>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 16 }}>
           <button onClick={() => setDraft(null)} style={{ padding: 14, borderRadius: 14, border: "1px solid var(--line)", background: "var(--surface)", fontWeight: 600, color: "var(--ink)", cursor: "pointer" }}>← Edit lagi</button>
-          <button onClick={() => {
-            const ok = onSave(draft);
+          <button onClick={async () => {
+            const ok = await onSave(draft);
             if (ok) onClose();
             else setErr(isKasir ? "Hanya pengeluaran laci. Omset lewat Laporan Omset." : "Transaksi tidak diizinkan untuk role Anda.");
           }} style={{ padding: 14, borderRadius: 14, border: "none", background: "var(--brand)", fontWeight: 700, color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><Check size={18} />Simpan</button>
@@ -2150,7 +2718,7 @@ function CatatTransaksi({ s, bizId, onSave, onClose }) {
             <div style={{ fontSize: 13, color: "var(--brand)", fontWeight: 600, marginTop: 14 }}>Tips: Sebutkan barang + nominal uangnya.</div>
           </Card>
         )}
-        {mode === "manual" && <ManualForm s={s} onReady={setDraft} />}
+        {mode === "manual" && <ManualForm s={s} mutate={mutate} onNotify={onNotify} onReady={setDraft} business={business} />}
         {mode === "scan" && role !== "purchasing" && !isKasir && (
           <Card style={{ padding: 40, textAlign: "center", background: "var(--surface2)", border: "none" }}>
             <ScanLine size={44} color="var(--brand)" style={{ margin: "0 auto 12px" }} />
@@ -2237,9 +2805,9 @@ const ModeBtn = ({ active, onClick, Icon, label, disabled }) => (
   </button>
 );
 
-function ManualForm({ s, onReady }) {
+function ManualForm({ s, mutate, onNotify, onReady, business }) {
   const role = s.currentUser?.role || "kasir";
-  const myWallets = visibleWallets(s.wallets, s.currentUser);
+  const myWallets = visibleWalletsForBusiness(s.wallets, s.currentUser, business);
 
   const allowedTypes = [];
   if (canDo(role, "inputIncome")) allowedTypes.push(["in", "Pemasukan"]);
@@ -2256,8 +2824,36 @@ function ManualForm({ s, onReady }) {
   const [date, setDate] = useState(today());
   const [floorErr, setFloorErr] = useState("");
 
-  const cats = visibleCategories(s.categories, s.currentUser, type === "transfer" ? "out" : type);
-  useEffect(() => { setCatId(cats[0]?.id || ""); }, [type]);
+  const walletIds = myWallets.map((w) => w.id).join("|");
+  const transferTargetWallets = myWallets.filter((w) => w.id !== walletId);
+  const transferTargetIds = transferTargetWallets.map((w) => w.id).join("|");
+
+  useEffect(() => {
+    setWalletId((prev) => (myWallets.some((w) => w.id === prev) ? prev : myWallets[0]?.id || ""));
+  }, [walletIds]);
+
+  useEffect(() => {
+    if (type !== "transfer") return;
+    setToWalletId((prev) => {
+      if (transferTargetWallets.some((w) => w.id === prev)) return prev;
+      const preferred = walletId === "w_kas_besar" ? transferTargetWallets.find(isKasKecilWallet) : null;
+      return (preferred || transferTargetWallets[0])?.id || "";
+    });
+  }, [type, walletId, transferTargetIds]);
+
+  const cats = visibleCategoriesForBusiness(
+    s.categories,
+    s.currentUser,
+    type === "transfer" ? "out" : type,
+    business
+  );
+  const catIds = cats.map((c) => c.id).join("|");
+  useEffect(() => {
+    setCatId((prev) => (cats.some((c) => c.id === prev) ? prev : cats[0]?.id || ""));
+  }, [type, catIds]);
+
+  const typeColors = { in: "var(--in)", out: "var(--out)", transfer: "var(--brand)" };
+  const pillColor = typeColors[type];
 
   const checkAndReady = () => {
     if (type === "transfer") {
@@ -2274,24 +2870,21 @@ function ManualForm({ s, onReady }) {
     setFloorErr("");
   };
 
-  const typeColors = { in: "var(--in)", out: "var(--out)", transfer: "var(--brand)" };
   const ready = amt && (type === "transfer" ? (walletId && toWalletId && walletId !== toWalletId) : catId);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      {/* tipe selector */}
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "grid", gridTemplateColumns: `repeat(${allowedTypes.length},1fr)`, gap: 2, background: "var(--surface2)", borderRadius: 12, padding: 4 }}>
         {allowedTypes.map(([v, l]) => (
-          <button key={v} onClick={() => { setType(v); setFloorErr(""); }} style={{ padding: 11, borderRadius: 9, fontSize: 13, fontWeight: 700, border: "none", cursor: "pointer", background: type === v ? typeColors[v] : "transparent", color: type === v ? "#fff" : "var(--ink2)" }}>{l}</button>
+          <button key={v} type="button" onClick={() => { setType(v); setFloorErr(""); }} style={{ padding: 11, borderRadius: 9, fontSize: 13, fontWeight: 700, border: "none", cursor: "pointer", background: type === v ? typeColors[v] : "transparent", color: type === v ? "#fff" : "var(--ink2)" }}>{l}</button>
         ))}
       </div>
 
-      {/* nominal */}
       <Fld label="Nominal">
         <div style={{ display: "flex", alignItems: "center", border: `1px solid ${floorErr ? "var(--out)" : "var(--line)"}`, borderRadius: 12, background: "var(--surface)" }}>
           <span style={{ padding: "0 12px", color: "var(--ink3)", fontWeight: 700 }}>Rp</span>
           <input inputMode="numeric" value={amt ? new Intl.NumberFormat("id-ID").format(amt) : ""} onChange={e => { setAmt(e.target.value.replace(/\D/g, "")); setFloorErr(""); }} placeholder="0"
-            style={{ flex: 1, padding: "13px 0 13px 4px", background: "none", border: "none", fontSize: 16, fontWeight: 700, color: "var(--ink)", outline: "none" }} />
+            style={{ flex: 1, minWidth: 0, padding: "13px 12px 13px 4px", background: "none", border: "none", fontSize: 18, fontWeight: 700, color: "var(--ink)", outline: "none" }} />
         </div>
         {floorErr && (
           <div style={{ marginTop: 6, padding: "8px 12px", borderRadius: 8, background: "var(--out-soft)", color: "var(--out-text)", fontSize: 12, fontWeight: 600 }}>
@@ -2305,7 +2898,7 @@ function ManualForm({ s, onReady }) {
         <>
           <Fld label="Dari dompet">
             <select value={walletId} onChange={e => { setWalletId(e.target.value); setFloorErr(""); }}
-              style={{ width: "100%", padding: "12px 14px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface)", fontSize: 14, color: "var(--ink)", outline: "none" }}>
+              style={manualFieldInput}>
               {myWallets.map(w => {
                 const bal = walletBalance(w.id, s.wallets, s.transactions);
                 return <option key={w.id} value={w.id}>{walletOptionLabel(w, bal, s.profile.currency, s.currentUser, fmtMoney)}</option>;
@@ -2314,8 +2907,8 @@ function ManualForm({ s, onReady }) {
           </Fld>
           <Fld label="Ke dompet">
             <select value={toWalletId} onChange={e => setToWalletId(e.target.value)}
-              style={{ width: "100%", padding: "12px 14px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface)", fontSize: 14, color: "var(--ink)", outline: "none" }}>
-              {myWallets.filter(w => w.id !== walletId).map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+              style={manualFieldInput}>
+              {transferTargetWallets.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
             </select>
           </Fld>
           {walletId && amt && (() => {
@@ -2333,13 +2926,43 @@ function ManualForm({ s, onReady }) {
       ) : (
         <>
           <Fld label="Kategori">
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              {cats.map(c => <Pill key={c.id} active={catId === c.id} onClick={() => setCatId(c.id)}>{c.name}</Pill>)}
+            <div
+              className="scroll-hide"
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 8,
+                maxHeight: 200,
+                overflowY: "auto",
+                padding: 10,
+                borderRadius: 12,
+                border: "1px solid var(--line)",
+                background: "var(--surface2)",
+              }}
+            >
+              {cats.map((c) => (
+                <CatChip key={c.id} active={catId === c.id} color={pillColor} onClick={() => setCatId(c.id)}>
+                  {c.name}
+                </CatChip>
+              ))}
             </div>
+            {mutate && (
+              <CategoryQuickManage
+                compact
+                categories={s.categories}
+                transactions={s.transactions}
+                user={s.currentUser}
+                txType={type}
+                catId={catId}
+                onSelectCat={setCatId}
+                mutate={mutate}
+                onNotify={onNotify}
+              />
+            )}
           </Fld>
           <Fld label="Dompet">
             <select value={walletId} onChange={e => { setWalletId(e.target.value); setFloorErr(""); }}
-              style={{ width: "100%", padding: "12px 14px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface)", fontSize: 14, color: "var(--ink)", outline: "none" }}>
+              style={manualFieldInput}>
               {myWallets.map(w => {
                 const bal = walletBalance(w.id, s.wallets, s.transactions);
                 return <option key={w.id} value={w.id}>{walletOptionLabel(w, bal, s.profile.currency, s.currentUser, fmtMoney)}</option>;
@@ -2360,20 +2983,26 @@ function ManualForm({ s, onReady }) {
         </>
       )}
 
-      {/* tanggal & catatan */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <Fld label="Tanggal"><input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ width: "100%", padding: "12px 14px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface)", fontSize: 14, color: "var(--ink)", outline: "none" }} /></Fld>
-        <Fld label="Catatan"><input value={desc} onChange={e => setDesc(e.target.value)} placeholder="opsional" style={{ width: "100%", padding: "12px 14px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface)", fontSize: 14, color: "var(--ink)", outline: "none" }} /></Fld>
-      </div>
+      <Fld label="Tanggal">
+        <input type="date" value={date} onChange={e => setDate(e.target.value)} style={manualFieldInput} />
+      </Fld>
+      <Fld label="Catatan">
+        <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="Opsional — keterangan singkat" style={manualFieldInput} />
+      </Fld>
 
-      <button disabled={!ready} onClick={checkAndReady}
-        style={{ padding: 14, borderRadius: 14, border: "none", background: ready ? typeColors[type] : "var(--ink3)", opacity: ready ? 1 : .5, color: "#fff", fontWeight: 700, fontSize: 15, cursor: "pointer" }}>
+      <button type="button" disabled={!ready} onClick={checkAndReady}
+        style={{ padding: 15, borderRadius: 14, border: "none", background: ready ? typeColors[type] : "var(--ink3)", opacity: ready ? 1 : 0.45, color: "#fff", fontWeight: 700, fontSize: 15, cursor: ready ? "pointer" : "not-allowed", marginTop: 4 }}>
         Lanjut tinjau →
       </button>
     </div>
   );
 }
-const Fld = ({ label, children }) => <div><div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink3)", marginBottom: 6 }}>{label}</div>{children}</div>;
+const Fld = ({ label, children }) => (
+  <div style={{ minWidth: 0 }}>
+    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--ink3)", marginBottom: 6 }}>{label}</div>
+    {children}
+  </div>
+);
 
 // ─── Daily Report Sosmed ───────────────────────────────────
 function SosNumRow({ label, value, onChange }) {
@@ -3205,7 +3834,10 @@ function SettleReportCard({ r, s, cur, user, onVerify, onRevision, onSettle, onD
   const laciBal = walletId ? walletBalance(walletId, s.wallets, s.transactions) : 0;
   const floor = r.laciFloor || LACI_FLOOR;
   const expectedLaci = floor + cash;
-  const laciOk = Math.abs(laciBal - expectedLaci) <= 1000;
+  const laciDiff = laciBal - expectedLaci;
+  const laciOk = Math.abs(laciDiff) <= 1000;
+  const laciOver = laciDiff > 1000;
+  const laciUnder = laciDiff < -1000;
   const urgency = reportSettleUrgency(r);
   const statusLabel = {
     submitted: "Menunggu verifikasi",
@@ -3240,7 +3872,12 @@ function SettleReportCard({ r, s, cur, user, onVerify, onRevision, onSettle, onD
           <div>Harusnya (floor + tunai): <b>{fmtMoney(expectedLaci, cur)}</b></div>
           {!laciOk && (
             <div style={{ color: "#92400E", fontWeight: 700, marginTop: 4, lineHeight: 1.45 }}>
-              ⚠ Selisih besar — kemungkinan duplikat omset tunai dari revisi.
+              ⚠ Selisih besar
+              {laciOver
+                ? " — kemungkinan duplikat omset tunai dari revisi."
+                : laciUnder
+                  ? " — transaksi tunai belum masuk laci (atau sudah terhapus)."
+                  : "."}
               {onDelete
                 ? " Gunakan tombol merah Hapus laporan di bawah (bukan hapus transaksi satu-satu di Laporan)."
                 : " Minta kasir revisi atau hubungi admin."}
@@ -3315,9 +3952,9 @@ function SettleReportCard({ r, s, cur, user, onVerify, onRevision, onSettle, onD
             </button>
           )}
           {r.status === "admin_verified" && (
-            <button disabled={busy === r.id || pendingVoids.length > 0} onClick={() => onSettle(r.id)}
-              style={{ width: "100%", padding: 11, borderRadius: 12, border: "none", background: pendingVoids.length ? "var(--ink3)" : "var(--brand)", color: "#fff", fontWeight: 700, fontSize: 13, cursor: pendingVoids.length ? "default" : "pointer", opacity: busy === r.id ? .6 : 1 }}>
-              {busy === r.id ? "Memproses…" : pendingVoids.length ? "Review void dulu" : "Settle → Kas Besar & Rekening"}
+            <button disabled={busy === r.id || pendingVoids.length > 0 || !laciOk} onClick={() => onSettle(r.id)}
+              style={{ width: "100%", padding: 11, borderRadius: 12, border: "none", background: (pendingVoids.length || !laciOk) ? "var(--ink3)" : "var(--brand)", color: "#fff", fontWeight: 700, fontSize: 13, cursor: (pendingVoids.length || !laciOk) ? "default" : "pointer", opacity: busy === r.id ? .6 : 1 }}>
+              {busy === r.id ? "Memproses…" : pendingVoids.length ? "Review void dulu" : !laciOk ? "Perbaiki selisih laci dulu" : "Settle → Kas Besar & Rekening"}
             </button>
           )}
           {(r.status === "submitted" || r.status === "admin_verified") && (
@@ -3329,18 +3966,67 @@ function SettleReportCard({ r, s, cur, user, onVerify, onRevision, onSettle, onD
           {r.status !== "revision_requested" && (
             <DeleteReportButton report={r} busy={busy} onDelete={onDelete} />
           )}
-          {r.status === "revision_requested" && onDelete && (
-            <DeleteReportButton report={r} busy={busy} onDelete={onDelete} label="Hapus laporan omset — kasir isi ulang" />
-          )}
         </div>
       )}
     </Card>
   );
 }
 
+const REPORT_STATUS_SHORT = {
+  submitted: "Menunggu verifikasi",
+  admin_verified: "Siap settle",
+  revision_requested: "Menunggu revisi kasir",
+  settled: "Settled ✓",
+};
+
+function TodayOmsetPanel({ reports, dateStr, cur }) {
+  const todayList = reportsForDate(reports, dateStr);
+  const byOutlet = new Map(todayList.map(r => [r.outlet, r]));
+  const missing = OUTLETS.filter(o => !byOutlet.has(o));
+  const pending = todayList.filter(r => r.status !== "settled");
+  return (
+    <div style={{ marginBottom: 20, padding: "12px 14px", borderRadius: 12, background: missing.length ? "var(--amber-soft)" : "var(--surface2)", border: `1px solid ${missing.length ? "var(--amber)" : "var(--line)"}` }}>
+      <div style={{ fontWeight: 800, fontSize: 14, color: "var(--ink)", marginBottom: 8 }}>
+        Omset hari ini · {shortDate(dateStr)}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>
+        {OUTLETS.map(outlet => {
+          const r = byOutlet.get(outlet);
+          if (!r) {
+            return (
+              <div key={outlet} style={{ display: "flex", justifyContent: "space-between", color: "var(--out-text)", fontWeight: 700 }}>
+                <span>{OUTLET_LABEL[outlet] || outlet}</span>
+                <span>Belum terkirim</span>
+              </div>
+            );
+          }
+          const urgent = r.status === "submitted" || r.status === "admin_verified";
+          return (
+            <div key={outlet} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontWeight: urgent ? 700 : 500, color: urgent ? "var(--ink)" : "var(--ink2)" }}>
+              <span>{OUTLET_LABEL[outlet] || outlet}</span>
+              <span style={{ textAlign: "right" }}>
+                {REPORT_STATUS_SHORT[r.status] || r.status} · {fmtMoney(r.total, cur)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      {missing.length > 0 && (
+        <div style={{ fontSize: 12, color: "var(--out-text)", marginTop: 10, lineHeight: 1.45, fontWeight: 600 }}>
+          ⚠ {missing.map(o => OUTLET_LABEL[o] || o).join(", ")} belum masuk awan — minta kasir tap ☁️ sync.
+        </div>
+      )}
+      {pending.length === 0 && !missing.length && todayList.length > 0 && (
+        <div style={{ fontSize: 12, color: "var(--in-text)", marginTop: 8, fontWeight: 600 }}>✓ Semua outlet sudah settled untuk tanggal ini.</div>
+      )}
+    </div>
+  );
+}
+
 function SettleLaporanScreen({ s, mutate, onClose }) {
   const user = s.currentUser;
   const cur = s.profile.currency;
+  const todayStr = today();
   const awaitingVerify = reportsAwaitingVerify(s.dailyReports, s.transactions);
   const readyToSettle = reportsReadyToSettle(s.dailyReports, s.transactions);
   const awaitingRevision = reportsAwaitingRevision(s.dailyReports, s.transactions);
@@ -3352,13 +4038,6 @@ function SettleLaporanScreen({ s, mutate, onClose }) {
   const [revisingId, setRevisingId] = useState(null);
   const [revisionNote, setRevisionNote] = useState("");
 
-  const patchReport = (reportId, report) => {
-    mutate(d => {
-      const i = (d.dailyReports || []).findIndex(r => r.id === reportId);
-      if (i >= 0) d.dailyReports[i] = report;
-    });
-  };
-
   const doVerify = (reportId) => {
     setErr(""); setBusy(reportId);
     try {
@@ -3366,6 +4045,9 @@ function SettleLaporanScreen({ s, mutate, onClose }) {
       mutate(d => {
         const i = (d.dailyReports || []).findIndex(r => r.id === reportId);
         if (i >= 0) d.dailyReports[i] = updated;
+        d.staffMessages = fulfillSubmittedReportMessages(
+          d.staffMessages, updated.id, updated.date, updated.outlet, updated.adminVerifiedAt
+        );
         try {
           const nmsg = createDailyReportVerifiedMessage({ report: updated, author: user });
           d.staffMessages = prependStaffMessage(d.staffMessages, nmsg, d.notificationPrefs);
@@ -3373,6 +4055,7 @@ function SettleLaporanScreen({ s, mutate, onClose }) {
       });
       setRevisingId(null);
       setRevisionNote("");
+      showActionToast(`Laporan ${OUTLET_LABEL[updated.outlet] || updated.outlet} · ${shortDate(updated.date)} diverifikasi.`, "success");
     } catch (e) {
       setErr(e.message || "Gagal verifikasi");
     }
@@ -3391,6 +4074,7 @@ function SettleLaporanScreen({ s, mutate, onClose }) {
       });
       setRevisingId(null);
       setRevisionNote("");
+      showActionToast(`Permintaan revisi dikirim ke kasir ${updated.outlet}.`, "success");
     } catch (e) {
       setErr(e.message || "Gagal minta revisi");
     }
@@ -3408,11 +4092,15 @@ function SettleLaporanScreen({ s, mutate, onClose }) {
         d.staffMessages = resolveRevisionMessages(
           d.staffMessages, report.id, report.kasirId, report.date, report.settledAt
         );
+        d.staffMessages = fulfillSubmittedReportMessages(
+          d.staffMessages, report.id, report.date, report.outlet, report.settledAt
+        );
         try {
           const nmsg = createDailyReportSettledMessage({ report, author: user });
           d.staffMessages = prependStaffMessage(d.staffMessages, nmsg, d.notificationPrefs);
         } catch { /* ignore */ }
       });
+      showActionToast(`Laporan ${OUTLET_LABEL[report.outlet] || report.outlet} · ${shortDate(report.date)} disettle.`, "success");
     } catch (e) {
       setErr(e.message || "Gagal settle");
     }
@@ -3421,7 +4109,7 @@ function SettleLaporanScreen({ s, mutate, onClose }) {
 
   const doDelete = (report) => {
     const label = `${OUTLET_LABEL[report.outlet] || report.outlet} · ${shortDate(report.date)}`;
-    const txCount = (s.transactions || []).filter(t => t.dailyReportId === report.id).length;
+    const txCount = collectAllDailyReportTxIds(s.transactions, report).length;
     const settledHint = report.status === "settled" || txCount > 1
       ? `\n\nAkan hapus laporan + ${txCount || 0} transaksi terkait (termasuk settle jika ada). Saldo dompet disesuaikan.`
       : "\n\nSaldo laci disesuaikan.";
@@ -3464,6 +4152,8 @@ function SettleLaporanScreen({ s, mutate, onClose }) {
           Semua laporan kasir tampil di bawah — <b>tidak disembunyikan</b>. Salah? <b>Hapus</b> lalu kasir kirim ulang. Settled juga bisa dihapus owner jika perlu koreksi.
         </div>
         {err && <div style={{ marginBottom: 12, padding: 12, borderRadius: 10, background: "var(--out-soft)", color: "var(--out-text)", fontSize: 13 }}>{err}</div>}
+
+        <TodayOmsetPanel reports={s.dailyReports} dateStr={todayStr} cur={cur} />
 
         {awaitingVerify.length > 0 && (
           <>
@@ -3869,9 +4559,9 @@ function InboxScreen({ s, onClose, onAccept, onDismiss, onAddDraft }) {
 }
 
 // ─── Sesuaikan Saldo (Admin / Owner) ───────────────────────
-function AdjustSaldoScreen({ s, mutate, onClose, user }) {
+function AdjustSaldoScreen({ s, mutate, onClose, user, business }) {
   const cur = s.profile.currency;
-  const wallets = visibleWallets(s.wallets, user);
+  const wallets = visibleWalletsForBusiness(s.wallets, user, business);
   const [walletId, setWalletId] = useState(wallets[0]?.id || "");
   const [target, setTarget] = useState("");
   const [err, setErr] = useState("");
@@ -3881,9 +4571,32 @@ function AdjustSaldoScreen({ s, mutate, onClose, user }) {
   const targetNum = +String(target).replace(/\D/g, "") || 0;
   const preview = computeBalanceAdjustment(bal, targetNum);
   const walletName = wallets.find((w) => w.id === walletId)?.name || "Dompet";
+  const wallet = wallets.find((w) => w.id === walletId);
+  const recentAdj = walletId ? recentBalanceAdjustments(s.transactions, walletId, 5) : [];
+  const adjToday = walletId ? countBalanceAdjustments(s.transactions, walletId, today()) : 0;
+  const isLaci = !!(wallet?.outlet || /laci/i.test(wallet?.name || ""));
 
   const apply = () => {
     setErr("");
+    const lines = [
+      "Sesuaikan saldo",
+      "",
+      `Dompet: ${walletName}`,
+      `Saldo sistem: ${fmtMoney(bal, cur)}`,
+      preview.ok ? `Target: ${fmtMoney(preview.target, cur)}` : "",
+      "",
+      "Tidak untuk:",
+      "• Selisih laci → Settle Laporan Kasir",
+      "• Purchasing minus → minta admin transfer",
+      "",
+      "Hanya jika uang fisik/rekening sudah dihitung dan beda dengan Laporan.",
+    ].filter(Boolean);
+    if (adjToday >= 1) {
+      lines.push("", `⚠ Dompet ini sudah ${adjToday}x disesuaikan hari ini — yakin perlu lagi?`);
+    }
+    lines.push("", "Lanjutkan penyesuaian?");
+    if (!confirm(lines.join("\n"))) return;
+
     try {
       let result = null;
       mutate((d) => {
@@ -3914,13 +4627,39 @@ function AdjustSaldoScreen({ s, mutate, onClose, user }) {
   const displayBal = doneBal != null ? doneBal : bal;
 
   return (
-    <Sheet title="Sesuaikan Saldo" onClose={onClose}>
+    <Sheet title="Sesuaikan Saldo (recovery)" onClose={onClose}>
       <div style={{ padding: "16px 16px 40px", display: "flex", flexDirection: "column", gap: 14 }}>
-        <div style={{ fontSize: 13, color: "var(--ink2)", lineHeight: 1.5, padding: "10px 12px", background: "var(--surface2)", borderRadius: 10 }}>
-          Masukkan <b>uang fisik / saldo rekening sekarang</b> — saldo sistem akan <b>diset persis</b> ke angka itu setelah Terapkan (Beranda & Kelola Dompet ikut berubah).
-          <div style={{ marginTop: 8, fontSize: 12, color: "var(--ink3)" }}>
-            Owner/admin: sistem mengikuti angka yang Anda masukkan. Duplikat laporan kasir? Hapus laporan omset dulu agar riwayat bersih.
+        <div style={{ fontSize: 13, color: "var(--out-text)", lineHeight: 1.55, padding: "12px 14px", background: "var(--out-soft)", borderRadius: 12, border: "2px solid var(--out-text)" }}>
+          <div style={{ fontWeight: 800, marginBottom: 8 }}>Petunjuk</div>
+          <div style={{ color: "var(--ink2)", fontSize: 12, lineHeight: 1.5 }}>
+            Fitur ini hanya untuk selisih uang fisik/rekening vs saldo sistem.
+            <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
+              <li>Selisih laci → <b>Settle Laporan Kasir</b></li>
+              <li>Kas Kecil habis → admin <b>transfer dana</b></li>
+              <li>Bukan untuk laporan kasir atau purchasing minus</li>
+            </ul>
           </div>
+        </div>
+        {isLaci && (
+          <div style={{ fontSize: 12, color: "#92400E", fontWeight: 700, padding: "10px 12px", background: "var(--amber-soft)", borderRadius: 10, lineHeight: 1.45 }}>
+            ⚠ Dompet laci — biasanya masalah laporan omset. Cek Settle Laporan dulu.
+          </div>
+        )}
+        {adjToday > 0 && (
+          <div style={{ fontSize: 12, color: "var(--out-text)", fontWeight: 700, padding: "10px 12px", background: "var(--amber-soft)", borderRadius: 10 }}>
+            Dompet ini sudah {adjToday}× disesuaikan hari ini. Tap berulang biasanya bikin data makin kacau.
+          </div>
+        )}
+        {recentAdj.length > 0 && (
+          <div style={{ fontSize: 12, color: "var(--ink2)", padding: "10px 12px", background: "var(--surface2)", borderRadius: 10, lineHeight: 1.45 }}>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>Penyesuaian manual terakhir</div>
+            {recentAdj.map((t) => (
+              <div key={t.id}>{shortDate(t.date)} · {t.type === "in" ? "+" : "−"}{fmtMoney(t.amount, cur)} · {t.desc}</div>
+            ))}
+          </div>
+        )}
+        <div style={{ fontSize: 13, color: "var(--ink2)", lineHeight: 1.5, padding: "10px 12px", background: "var(--surface2)", borderRadius: 10 }}>
+          Masukkan <b>uang fisik / saldo rekening sekarang</b> — sistem akan diset ke angka itu (bukan tambah/kurang manual berkali-kali).
         </div>
         <Fld label="Dompet">
           <select value={walletId} onChange={e => { setWalletId(e.target.value); setTarget(""); setDoneBal(null); setErr(""); }}
@@ -3971,8 +4710,8 @@ function AdjustSaldoScreen({ s, mutate, onClose, user }) {
               </div>
             )}
             <button disabled={!preview.ok} onClick={apply}
-              style={{ width: "100%", padding: 14, borderRadius: 14, border: "none", background: preview.ok ? "var(--brand)" : "var(--ink3)", opacity: preview.ok ? 1 : .5, color: "#fff", fontWeight: 700, cursor: preview.ok ? "pointer" : "default" }}>
-              Terapkan penyesuaian
+              style={{ width: "100%", padding: 14, borderRadius: 14, border: "none", background: preview.ok ? "var(--out-text)" : "var(--ink3)", opacity: preview.ok ? 1 : .5, color: "#fff", fontWeight: 700, cursor: preview.ok ? "pointer" : "default" }}>
+              Terapkan penyesuaian (recovery)
             </button>
             {doneBal != null && (
               <button type="button" onClick={onClose}
@@ -3988,11 +4727,20 @@ function AdjustSaldoScreen({ s, mutate, onClose, user }) {
 }
 
 // ─── Settings & Profil ─────────────────────────────────────
-function PengaturanScreen({ s, mutate, onClose, setOverlay, setTab, bizId, authUser, signOut, businesses, switchBusiness, businessDisplayName, features }) {
+function PengaturanScreen({ s, mutate, onClose, setOverlay, setTab, bizId, authUser, signOut, businesses, switchBusiness, businessDisplayName, features, business }) {
   const role = s.currentUser?.role || "kasir";
   const isKasir = role === "kasir";
   const isPurchasing = role === "purchasing";
   const isStaff = isKasir || isPurchasing;
+  const purchasingArea = isPurchasing && s.currentUser?.outlet && !["KBU", "KSM", "SMT"].includes(s.currentUser.outlet)
+    ? s.currentUser.outlet
+    : null;
+  const accessibleWallets = isPurchasing
+    ? visibleWalletsForBusiness(s.wallets || [], s.currentUser || {}, business)
+    : [];
+  const walletAccessLabel = isPurchasing
+    ? accessibleWallets.map((w) => w.name).join(", ") || "—"
+    : "";
   const loginEmail = authUser?.email || s.profile.email || "—";
   const setP = (k, v) => mutate(d => { d.profile[k] = v; });
   const setA = (k, v) => mutate(d => { d.automation[k] = v; });
@@ -4028,7 +4776,15 @@ function PengaturanScreen({ s, mutate, onClose, setOverlay, setTab, bizId, authU
           {isStaff ? (
             <>
               <SRow icon={User} label="Nama staf" val={s.currentUser?.name || "—"} />
-              <SRow icon={Store} label="Outlet / Peran" val={isKasir ? `${s.currentUser?.outlet || "—"} · Kasir` : ROLE_LABEL[role]} />
+              {isKasir ? (
+                <SRow icon={Store} label="Outlet / Peran" val={`${s.currentUser?.outlet || "—"} · Kasir`} />
+              ) : (
+                <>
+                  <SRow icon={Store} label="Role" val={ROLE_LABEL[role]} />
+                  <SRow icon={Store} label="Lokasi pembelian" val={purchasingArea || "Umum"} />
+                  <SRow icon={Wallet} label="Dompet yang dapat diakses" sub={walletAccessLabel} />
+                </>
+              )}
             </>
           ) : (
             <>
@@ -4036,13 +4792,10 @@ function PengaturanScreen({ s, mutate, onClose, setOverlay, setTab, bizId, authU
               <SRow icon={Store} label="Tipe Akun" val={s.profile.type} onClick={() => setP("type", s.profile.type === "Usaha" ? "Pribadi" : "Usaha")} />
             </>
           )}
-          {canDo(role, "editSaldoDompet") && (
-            <SRow icon={Wallet} label="Sesuaikan Saldo" sub="Koreksi selisih saldo dompet" onClick={() => setOverlay("adjustSaldo")} chev />
-          )}
           {canDo(role, "kelolaDompet") && <SRow icon={Wallet} label="Kelola Dompet" sub="Atur dompet dan pembagian uang Anda" onClick={() => setOverlay("wallets")} chev />}
           {canDo(role, "kelolaKategoriSendiri") && <SRow icon={Filter} label="Kelola Kategori" sub={canDo(role, "kelolaKategoriSemua") ? "Semua kategori transaksi" : "Kategori untuk role Anda"} onClick={() => setOverlay("categories")} chev />}
           {features?.purchasingModule && canDo(role, "kelolaKategoriSemua") && (
-            <SRow icon={Filter} label="Kategori Purchasing" sub="Kelola kategori belanja purchasing" onClick={() => setOverlay("kategoriPurchasing")} chev />
+            <SRow icon={Filter} label="Kategori Purchasing" sub="Icon, warna & sembunyikan 13 kelompok belanja" onClick={() => setOverlay("kategoriPurchasing")} chev />
           )}
           {features?.purchasingModule && canDo(role, "kelolaKategoriSemua") && (
             <SRow icon={Tags} label="Alias Barang Purchasing" sub="Review & approve pengelompokan nama barang" onClick={() => setOverlay("purchasingAliases")} chev />
@@ -4169,6 +4922,18 @@ function PengaturanScreen({ s, mutate, onClose, setOverlay, setTab, bizId, authU
           <>
             <Lbl>Web Dashboard</Lbl>
             <Card style={{ marginBottom: 24 }}><SRow icon={Monitor} label="Hubungkan ke Web" sub="Buka dashboard & laporan di PC" onClick={() => setOverlay("pair")} chev /></Card>
+          </>
+        )}
+
+        {canDo(role, "editSaldoDompet") && (
+          <>
+            <Lbl>Sesuaikan saldo</Lbl>
+            <div style={{ fontSize: 12, color: "var(--ink2)", marginTop: -6, marginBottom: 10, lineHeight: 1.45 }}>
+              Hanya jika uang fisik/rekening ≠ saldo sistem. Selisih laci → Settle Laporan Kasir.
+            </div>
+            <Card style={{ overflow: "hidden", marginBottom: 24, border: "1px solid var(--out-soft)" }}>
+              <SRow icon={Wallet} label="Sesuaikan Saldo" sub="Uang fisik ≠ saldo sistem" onClick={() => setOverlay("adjustSaldo")} chev />
+            </Card>
           </>
         )}
 
@@ -4321,11 +5086,15 @@ function WalletScreen({ s, mutate, onClose, user, bizId, businesses = [], featur
   }
 
   const save = (w) => {
+    const { accessMode: _accessMode, ...walletInput } = w || {};
+    const isPaylater = w.type === "paylater" || w.liability === true;
     const normalized = {
-      ...w,
+      ...walletInput,
       purchasingUse: w.purchasingUse === true || /kas\s*kecil/i.test(w.name || ""),
       sort: w.sort ?? (Math.max(0, ...s.wallets.map(x => x.sort || 0)) + 10),
       updatedAt: new Date().toISOString(),
+      ...(isPaylater ? { type: "paylater", liability: true, allowNegative: true } : {}),
+      ...(!features?.isFnB ? { outlet: null, allowedOutlets: [] } : {}),
     };
     mutate(d => {
       const i = d.wallets.findIndex(x => x.id === normalized.id);
@@ -4351,6 +5120,8 @@ function WalletScreen({ s, mutate, onClose, user, bizId, businesses = [], featur
   const sortedWallets = sortWallets(
     s.wallets.filter((w) => w.type !== "shared" && (features?.isFnB || !isFnBOnlyWallet(w)))
   );
+  const assignableMembers = (s.members || []).filter((m) => m.active !== false && (m.role === "kasir" || m.role === "purchasing"));
+  const hasAssignableMembers = assignableMembers.length > 0;
 
   const ensureWalletSetup = (d) => {
     if (!d.walletSetup?.initialized) {
@@ -4441,8 +5212,8 @@ function WalletScreen({ s, mutate, onClose, user, bizId, businesses = [], featur
     mutate(d => { d.wallets = d.wallets.filter(x => x.id !== w.id); });
   };
 
-  const typeLabels = { kas_fisik: "Kas Fisik", rekening: "Rekening", digital: "Digital" };
-  const typeColors = { kas_fisik: "#D97706", rekening: "#1D4ED8", digital: "#7C3AED" };
+  const typeLabels = { kas_fisik: "Kas Fisik", rekening: "Rekening", digital: "Digital", ewallet: "E-Wallet", paylater: "PayLater" };
+  const typeColors = { kas_fisik: "#D97706", rekening: "#1D4ED8", digital: "#7C3AED", ewallet: "#EE4D2D", paylater: "#B45309" };
 
   const onLogoPick = async (e) => {
     const f = e.target.files?.[0];
@@ -4576,17 +5347,35 @@ function WalletScreen({ s, mutate, onClose, user, bizId, businesses = [], featur
         <div style={{ position: "absolute", inset: 0, zIndex: 30, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "flex-end" }} onClick={() => setEdit(null)}>
           <div style={{ width: "100%", background: "var(--surface)", borderRadius: "20px 20px 0 0", padding: 20, maxHeight: "80vh", overflowY: "auto" }} className="scroll-hide" onClick={e => e.stopPropagation()}>
             <div style={{ fontWeight: 800, fontSize: 18, color: "var(--ink)", marginBottom: 16 }}>{edit.name ? `Edit: ${edit.name}` : "Dompet baru"}</div>
+            {!features?.isFnB && (
+              <div style={{ fontSize: 12, color: "var(--ink3)", lineHeight: 1.45, padding: "10px 12px", borderRadius: 12, background: "var(--surface2)", marginBottom: 12 }}>
+                <b>NF Nusa Fishing</b> — tidak pakai outlet resto. <b>Kas Fisik</b> = uang tunai, <b>E-Wallet</b> = ShopeePay/dll, <b>PayLater</b> = hutang, <b>Digital</b> = channel online (jarang dipakai di NF).
+              </div>
+            )}
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <Fld label="Nama">
-                <input value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value })} placeholder="cth: Laci KBU" style={{ width: "100%", padding: "11px 14px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface)", fontSize: 14, color: "var(--ink)", outline: "none" }} />
+                <input value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value })} placeholder={features?.isFnB ? "cth: Laci KBU" : "cth: Dompet Uang Makan"} style={{ width: "100%", padding: "11px 14px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface)", fontSize: 14, color: "var(--ink)", outline: "none" }} />
               </Fld>
               <Fld label="Tipe">
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
                   {Object.entries(typeLabels).map(([v, l]) => (
-                    <button key={v} onClick={() => setEdit({ ...edit, type: v })} style={{ padding: "9px 0", borderRadius: 10, fontSize: 12, fontWeight: 600, border: `1px solid ${edit.type === v ? typeColors[v] : "var(--line)"}`, background: edit.type === v ? typeColors[v] + "22" : "var(--surface)", color: edit.type === v ? typeColors[v] : "var(--ink2)", cursor: "pointer" }}>{l}</button>
+                    <button key={v} onClick={() => {
+                      const next = { ...edit, type: v };
+                      if (v === "paylater") {
+                        next.liability = true;
+                        next.allowNegative = true;
+                      }
+                      setEdit(next);
+                    }} style={{ padding: "9px 0", borderRadius: 10, fontSize: 12, fontWeight: 600, border: `1px solid ${edit.type === v ? typeColors[v] : "var(--line)"}`, background: edit.type === v ? typeColors[v] + "22" : "var(--surface)", color: edit.type === v ? typeColors[v] : "var(--ink2)", cursor: "pointer" }}>{l}</button>
                   ))}
                 </div>
+                {edit.type === "paylater" && (
+                  <div style={{ fontSize: 11, color: "#B45309", marginTop: 8, lineHeight: 1.4 }}>
+                    PayLater = hutang wajib bayar. Saldo boleh minus saat belanja.
+                  </div>
+                )}
               </Fld>
+              {features?.isFnB && (
               <Fld label="Outlet (opsional)">
                 <div style={{ display: "flex", gap: 6 }}>
                   {[null, "KBU", "KSM", "SMT"].map(o => (
@@ -4594,11 +5383,14 @@ function WalletScreen({ s, mutate, onClose, user, bizId, businesses = [], featur
                   ))}
                 </div>
               </Fld>
+              )}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <Fld label="Saldo awal (Rp)">
                   <input inputMode="numeric" value={edit.opening ? new Intl.NumberFormat("id-ID").format(edit.opening) : ""} onChange={e => setEdit({ ...edit, opening: +e.target.value.replace(/\D/g, "") })} placeholder="0" style={{ width: "100%", padding: "11px 14px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface)", fontSize: 14, color: "var(--ink)", outline: "none" }} />
                   <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: 6, lineHeight: 1.4 }}>
-                    Saldo tampilan = saldo awal + transaksi. Untuk sesuaikan uang fisik, pakai Atur → Sesuaikan Saldo.
+                    {features?.isFnB
+                      ? "Saldo = saldo awal + transaksi. Selisih laci → Settle Laporan Kasir."
+                      : "Saldo = saldo awal + transaksi masuk/keluar."}
                   </div>
                 </Fld>
                 <Fld label="Floor minimum (Rp)">
@@ -4611,12 +5403,139 @@ function WalletScreen({ s, mutate, onClose, user, bizId, businesses = [], featur
                   <span style={{ fontSize: 13, color: "var(--ink2)" }}>Hanya Owner yang bisa lihat</span>
                 </div>
               </Fld>
-              <Fld label="Dompet purchasing">
+              <Fld label="Penggunaan dompet">
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <Tog on={!!edit.purchasingUse} onToggle={() => setEdit({ ...edit, purchasingUse: !edit.purchasingUse })} />
-                  <span style={{ fontSize: 13, color: "var(--ink2)" }}>Muncul di form belanja purchasing</span>
+                  <span style={{ fontSize: 13, color: "var(--ink2)" }}>Tampilkan dompet ini sebagai pilihan pada Form Belanja Purchasing</span>
+                </div>
+                <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: 6, lineHeight: 1.4 }}>
+                  Jika aktif, dompet bisa dipilih saat input belanja. Ini tidak otomatis membuka akses ke semua user.
                 </div>
               </Fld>
+              <Fld label="Akses pengguna">
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "10px 12px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface2)" }}>
+                  {(() => {
+                    const accessMode = edit.accessMode || ((Array.isArray(edit.allowedUserIds) && edit.allowedUserIds.length > 0) ? "restricted" : "default");
+                    return (
+                      <>
+                  <div style={{ fontSize: 11, color: "var(--ink3)", lineHeight: 1.4, marginBottom: 4 }}>
+                    Tentukan siapa yang boleh melihat dan memakai dompet ini.
+                  </div>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--ink2)" }}>
+                    <input
+                      type="radio"
+                      name={`wallet-access-${edit.id}`}
+                      checked={accessMode === "default"}
+                      onChange={(e) => {
+                        if (e.target.checked) setEdit({ ...edit, accessMode: "default", allowedUserIds: [] });
+                      }}
+                    />
+                    Ikuti akses bawaan sistem (role + outlet)
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--ink2)" }}>
+                    <input
+                      type="radio"
+                      name={`wallet-access-${edit.id}`}
+                      checked={accessMode === "restricted"}
+                      disabled={!hasAssignableMembers}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          const firstUid = assignableMembers[0]?.user_id;
+                          setEdit({ ...edit, accessMode: "restricted", allowedUserIds: firstUid ? [firstUid] : [] });
+                        }
+                      }}
+                    />
+                    Batasi ke pengguna tertentu
+                  </label>
+                  {!hasAssignableMembers && (
+                    <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: 2 }}>
+                      Belum ada akun kasir/purchasing aktif untuk dipilih.
+                    </div>
+                  )}
+                  {assignableMembers.map((m) => {
+                    const uid = m.user_id;
+                    const checked = Array.isArray(edit.allowedUserIds) && edit.allowedUserIds.includes(uid);
+                    const canToggle = accessMode === "restricted";
+                    return (
+                      <label key={uid} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: canToggle ? "var(--ink)" : "var(--ink3)" }}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={!canToggle}
+                          onChange={(e) => {
+                            const prev = Array.isArray(edit.allowedUserIds) ? edit.allowedUserIds : [];
+                            const next = e.target.checked ? [...new Set([...prev, uid])] : prev.filter((x) => x !== uid);
+                            setEdit({ ...edit, accessMode: "restricted", allowedUserIds: next });
+                          }}
+                        />
+                        {m.profiles?.name || m.profiles?.email || uid} · {ROLE_LABEL[m.role] || m.role}{m.outlet ? ` · ${m.outlet}` : ""}
+                      </label>
+                    );
+                  })}
+                  {(accessMode === "default" || !Array.isArray(edit.allowedUserIds) || edit.allowedUserIds.length === 0) && (
+                    <div style={{ fontSize: 11, color: "var(--ink3)", marginTop: 2 }}>
+                      Saat mode bawaan aktif, akses user mengikuti role + outlet dari sistem.
+                    </div>
+                  )}
+                      </>
+                    );
+                  })()}
+                </div>
+              </Fld>
+              <Fld label="Role yang boleh akses (opsional)">
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "10px 12px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface2)" }}>
+                  {(["owner", "admin", "purchasing", ...(features?.isFnB ? ["kasir"] : [])]).map((r) => {
+                    const checked = Array.isArray(edit.allowedRoles) && edit.allowedRoles.includes(r);
+                    return (
+                      <label key={r} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--ink2)", padding: "6px 8px", borderRadius: 8, border: "1px solid var(--line)", background: "var(--surface)" }}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            const prev = Array.isArray(edit.allowedRoles) ? edit.allowedRoles : [];
+                            const next = e.target.checked ? [...new Set([...prev, r])] : prev.filter((x) => x !== r);
+                            setEdit({ ...edit, allowedRoles: next });
+                          }}
+                        />
+                        {ROLE_LABEL[r] || r}
+                      </label>
+                    );
+                  })}
+                  {(!Array.isArray(edit.allowedRoles) || edit.allowedRoles.length === 0) && (
+                    <div style={{ width: "100%", fontSize: 11, color: "var(--ink3)", marginTop: 2 }}>
+                      Kosong = tidak dibatasi role (akses ditentukan oleh aturan user/outlet yang berlaku).
+                    </div>
+                  )}
+                </div>
+              </Fld>
+              {features?.isFnB && Array.isArray(edit.allowedRoles) && edit.allowedRoles.includes("kasir") && (
+                <Fld label="Outlet kasir yang boleh akses">
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "10px 12px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface2)" }}>
+                    {["KBU", "KSM", "SMT"].map((o) => {
+                      const checked = Array.isArray(edit.allowedOutlets) && edit.allowedOutlets.includes(o);
+                      return (
+                        <label key={o} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--ink2)", padding: "6px 8px", borderRadius: 8, border: "1px solid var(--line)", background: "var(--surface)" }}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              const prev = Array.isArray(edit.allowedOutlets) ? edit.allowedOutlets : [];
+                              const next = e.target.checked ? [...new Set([...prev, o])] : prev.filter((x) => x !== o);
+                              setEdit({ ...edit, allowedOutlets: next });
+                            }}
+                          />
+                          {o}
+                        </label>
+                      );
+                    })}
+                    {(!Array.isArray(edit.allowedOutlets) || edit.allowedOutlets.length === 0) && (
+                      <div style={{ width: "100%", fontSize: 11, color: "var(--ink3)", marginTop: 2 }}>
+                        Kosong = semua outlet kasir.
+                      </div>
+                    )}
+                  </div>
+                </Fld>
+              )}
               <Fld label="Logo dompet (opsional)">
                 <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 14px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface2)" }}>
                   <WalletIcon wallet={edit} size={52} />
@@ -4673,6 +5592,7 @@ function CatScreen({ s, mutate, onClose }) {
   const showInTab = canManageAll || canDo(role, "inputIncome");
   const [tab, setTab] = useState("out");
   const [name, setName] = useState("");
+  const [catErr, setCatErr] = useState("");
 
   const cats = s.categories.filter(c => {
     if (c.type !== tab) return false;
@@ -4683,17 +5603,20 @@ function CatScreen({ s, mutate, onClose }) {
   });
 
   const addCat = () => {
-    if (!name.trim()) return;
-    mutate(d => d.categories.push({
-      id: "c" + Date.now(), name: name.trim(), type: tab, active: true,
-      role,
-      outlet: role === "kasir" ? user.outlet : null,
-    }));
+    const built = buildNewCategory({ name, type: tab, user, categories: s.categories });
+    if (!built.ok) {
+      setCatErr(built.error || "Gagal menambah kategori.");
+      return;
+    }
+    setCatErr("");
+    mutate((d) => { d.categories.push(built.category); });
     setName("");
   };
-  const canEdit = (c) => canManageAll || c.role === role;
+  const canEdit = (c) => canEditCategory(c, user);
   const toggleCat = (id) => mutate(d => { const c = d.categories.find(x => x.id === id); if (c && canEdit(c)) c.active = !c.active; });
-  const deleteCat = (id) => mutate(d => { const c = d.categories.find(x => x.id === id); if (c && canEdit(c)) d.categories = d.categories.filter(x => x.id !== id); });
+  const deleteCat = (id) => {
+    mutate((d) => applyRemoveCategory(d, id));
+  };
 
   return (
     <Sheet title="Kelola Kategori" onClose={onClose}>
@@ -4712,11 +5635,12 @@ function CatScreen({ s, mutate, onClose }) {
         ) : (
           <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ink2)", marginBottom: 16 }}>Kategori Pengeluaran Belanja</div>
         )}
-        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-          <input value={name} onChange={e => setName(e.target.value)} onKeyDown={e => e.key === "Enter" && addCat()} placeholder="Nama kategori baru" style={{ flex: 1, padding: "11px 14px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface)", fontSize: 14, color: "var(--ink)", outline: "none" }} />
+        <div style={{ display: "flex", gap: 8, marginBottom: catErr ? 8 : 16 }}>
+          <input value={name} onChange={e => { setName(e.target.value); setCatErr(""); }} onKeyDown={e => e.key === "Enter" && addCat()} placeholder="Nama kategori baru" style={{ flex: 1, padding: "11px 14px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface)", fontSize: 14, color: "var(--ink)", outline: "none" }} />
           <button onClick={addCat} style={{ width: 44, height: 44, borderRadius: 12, background: "var(--brand)", border: "none", color: "#fff", cursor: "pointer", display: "grid", placeItems: "center" }}><Plus size={20} /></button>
         </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {catErr && <div style={{ marginBottom: 12, padding: "10px 12px", borderRadius: 10, background: "var(--out-soft)", color: "var(--out-text)", fontSize: 12 }}>{catErr}</div>}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
           {cats.map(c => {
             const Ic = getCatIcon(c);
             return (
@@ -4767,7 +5691,10 @@ function PairScreen({ bizId, authUser, onClose }) {
           body: JSON.stringify({ userId: authUser.id, businessId: bizId }),
         });
         const json = await res.json();
-        if (!res.ok) throw new Error(json.error || "Gagal buat kode");
+        if (!res.ok) {
+          const msg = typeof json.error === "string" ? json.error : (json.error?.message || json.message || "Gagal buat kode");
+          throw new Error(msg);
+        }
         if (!alive) return;
         setCode(json.code);
         setStatus("waiting");
@@ -4870,7 +5797,7 @@ function BroadcastScreen({ s, mutate, onClose, user }) {
         if (!d.staffMessages) d.staffMessages = [];
         d.staffMessages.unshift(msg);
       });
-      setOk("Pengumuman terkirim — staf akan melihat setelah sync awan.");
+      setOk("Pengumuman terkirim — muncul di lonceng staf setelah sync.");
       setTitle(""); setBody("");
     } catch (e) {
       setErr(e.message || "Gagal kirim");
@@ -4883,7 +5810,7 @@ function BroadcastScreen({ s, mutate, onClose, user }) {
     <Sheet title="Kirim Pengumuman" onClose={onClose}>
       <div style={{ padding: "16px 16px 40px" }}>
         <div style={{ fontSize: 13, color: "var(--ink3)", lineHeight: 1.5, marginBottom: 14, padding: "10px 12px", background: "var(--surface2)", borderRadius: 10 }}>
-          Pengumuman disimpan di awan (Supabase) bersama data bisnis. Kasir/staf melihat di ikon <b>lonceng</b> setelah muat ulang atau auto-sync.
+          Staf melihat pengumuman di ikon <b>lonceng</b> setelah sync (otomatis atau tap ☁️).
         </div>
         <Fld label="Judul">
           <input value={title} onChange={e => setTitle(e.target.value)} placeholder="cth: Settle omset hari ini"
@@ -4943,7 +5870,8 @@ function BroadcastScreen({ s, mutate, onClose, user }) {
 
 // ─── Notif ─────────────────────────────────────────────────
 function NotifScreen({ s, user, mutate, onClose, onCompose, onAction }) {
-  const items = visibleStaffMessages(s.staffMessages, user);
+  const items = visibleStaffMessages(s.staffMessages, user)
+    .filter((m) => getMessageKind(m) === "broadcast" || !isStaffMessageStale(m, s.dailyReports));
   const canSend = canDo(user.role, "kirimPengumuman");
 
   const openMsg = (msg) => {
@@ -4980,7 +5908,7 @@ function NotifScreen({ s, user, mutate, onClose, onCompose, onAction }) {
           const unread = user?.id && !(n.readBy || []).includes(user.id);
           const kind = getMessageKind(n);
           const action = getStaffMessageAction(n, user);
-          const canTap = !!action && !!onAction;
+          const canTap = !!action && !!onAction && !isStaffMessageStale(n, s.dailyReports);
           const urgent = action?.urgent;
           const kindLabel = kind !== "broadcast" ? notificationKindLabel(kind) : null;
           return (
@@ -5220,6 +6148,112 @@ function VoidScreen({ s, mutate, user, reviewOnly = false }) {
   );
 }
 
+function WalletHistoryScreen({ s, business, walletId, onClose, sharedTxByWallet, bizId }) {
+  const user = s.currentUser || { role: "kasir" };
+  const isShared = isSharedWallet({ id: walletId });
+  const [loadingShared, setLoadingShared] = useState(false);
+  const [sharedTxLocal, setSharedTxLocal] = useState(null);
+
+  useEffect(() => {
+    if (!isShared || !bizId) return;
+    const cached = sharedTxByWallet?.[walletId];
+    if (cached?.length) {
+      setSharedTxLocal(cached);
+      return;
+    }
+    let cancelled = false;
+    setLoadingShared(true);
+    (async () => {
+      try {
+        const r = await fetchSharedBankTransactions(bizId, { sharedWalletId: walletId, limit: 100 });
+        if (!cancelled) setSharedTxLocal(r.transactions || []);
+      } catch {
+        if (!cancelled) setSharedTxLocal([]);
+      } finally {
+        if (!cancelled) setLoadingShared(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isShared, bizId, walletId, sharedTxByWallet]);
+
+  const allVisibleTx = useMemo(
+    () => visibleTransactionsForBusiness(s.transactions, s.wallets, user, business),
+    [s.transactions, s.wallets, user, business]
+  );
+  const myWallets = useMemo(
+    () => visibleWalletsForBusiness(s.wallets, user, business),
+    [s.wallets, user, business]
+  );
+  const wallet = myWallets.find((w) => w.id === walletId) || s.wallets.find((w) => w.id === walletId);
+  const tx = useMemo(() => {
+    if (!walletId) return [];
+    if (isShared) {
+      const rows = sharedTxLocal || sharedTxByWallet?.[walletId] || [];
+      return [...rows].sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.id || "").localeCompare(a.id || ""));
+    }
+    return allVisibleTx
+      .filter((t) => {
+        if (t.type === "transfer") {
+          const { from, to } = resolveTransferIds(t);
+          return from === walletId || to === walletId;
+        }
+        return resolveWalletId(t) === walletId;
+      })
+      .sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.id || "").localeCompare(a.id || ""));
+  }, [allVisibleTx, walletId, isShared, sharedTxLocal, sharedTxByWallet]);
+
+  return (
+    <Sheet title={`Riwayat ${wallet?.name || "Dompet"}`} onClose={onClose}>
+      <div style={{ padding: "12px 16px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
+        {isShared && (
+          <div style={{ fontSize: 12, color: "var(--ink3)", fontWeight: 600, padding: "0 2px 4px" }}>
+            Dompet bersama · data dari FNB
+          </div>
+        )}
+        {loadingShared && tx.length === 0 && (
+          <div style={{ textAlign: "center", color: "var(--ink3)", padding: "20px 0", fontSize: 13 }}>Memuat riwayat…</div>
+        )}
+        {tx.map((t) => {
+          const isTransfer = t.type === "transfer";
+          const cat = s.categories.find((c) => c.id === t.categoryId);
+          const { from, to } = isTransfer ? resolveTransferIds(t) : { from: null, to: null };
+          const fromW = isTransfer ? s.wallets.find((w) => w.id === from) : null;
+          const toW = isTransfer ? s.wallets.find((w) => w.id === to) : null;
+          const signedPrefix = isTransfer
+            ? (to === walletId ? "+" : "−")
+            : (t.type === "in" ? "+" : "−");
+          const amountColor = signedPrefix === "+" ? "var(--in-text)" : "var(--out-text)";
+          const title = isTransfer
+            ? `${fromW?.name || "Dompet"} → ${toW?.name || "Dompet"}`
+            : (t.desc || cat?.name || "Transaksi");
+          return (
+            <Card key={t.id} style={{ padding: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: "var(--ink)" }}>{title}</div>
+                  <div style={{ marginTop: 4, fontSize: 12, color: "var(--ink3)" }}>
+                    {isTransfer ? "Transfer" : (t.type === "in" ? "Pemasukan" : "Pengeluaran")} · {shortDate(t.date)}
+                  </div>
+                </div>
+                <div className="money" style={{ fontWeight: 800, fontSize: 14, color: amountColor, whiteSpace: "nowrap" }}>
+                  {signedPrefix}{fmtMoney(t.amount, s.profile.currency)}
+                </div>
+              </div>
+            </Card>
+          );
+        })}
+        {tx.length === 0 && (
+          <div style={{ textAlign: "center", color: "var(--ink3)", padding: "28px 0", fontSize: 13 }}>
+            Belum ada transaksi pada dompet ini.
+          </div>
+        )}
+      </div>
+    </Sheet>
+  );
+}
+
 // ─── NavBar ────────────────────────────────────────────────
 function NavBar({ tab, setTab, onMic, user, business, micTitle, shellMaxWidth = 440 }) {
   const cfg = navConfig(user, business);
@@ -5269,13 +6303,25 @@ export default function NF3App(props) {
   const [hide, setHide] = useState(false);
   const [cloudSyncState, setCloudSyncState] = useState("idle");
   const [syncInfo, setSyncInfo] = useState(null);
+  const [realtimeLive, setRealtimeLive] = useState(false);
   const [loadErr, setLoadErr] = useState(null);
+  const [walletHistoryId, setWalletHistoryId] = useState(null);
   const [fnbGate, setFnbGate] = useState(null);
+  const [sharedMirror, setSharedMirror] = useState(null);
+  const [sharedTxByWallet, setSharedTxByWallet] = useState(null);
   const [laporanInitialDate, setLaporanInitialDate] = useState(null);
   const [laporanOpenSeq, setLaporanOpenSeq] = useState(0);
+  const [isWideScreen, setIsWideScreen] = useState(false);
   const skipSaveRef = useRef(false);
   const allowSaveRef = useRef(false);
   const saveQueueRef = useRef(Promise.resolve());
+  const cloudSyncBusyRef = useRef(false);
+  const lastOwnSaveAtRef = useRef(null);
+  const lastSavePayloadRef = useRef(null);
+  const realtimePullTimerRef = useRef(null);
+  const saveDebounceRef = useRef(null);
+  const pendingSavePayloadRef = useRef(null);
+  const criticalSaveUntilRef = useRef(0);
   const sRef = useRef(null);
   const overlayRef = useRef(null);
   const catatRef = useRef(false);
@@ -5283,11 +6329,27 @@ export default function NF3App(props) {
   const openLaporanRef = useRef(null);
   const notifActionRef = useRef(null);
 
+  const getActiveAccountLabel = useCallback(() => {
+    const u = sRef.current?.currentUser || authUser || {};
+    const roleText = u?.role ? (ROLE_LABEL[u.role] || u.role) : "Akun";
+    const unit = u?.role === "kasir" ? u?.outlet : (u?.outlet || null);
+    return unit ? `${u?.name || "Staf"} · ${roleText} · ${unit}` : `${u?.name || "Staf"} · ${roleText}`;
+  }, [authUser]);
+
   useEffect(() => { sRef.current = s; }, [s]);
   useEffect(() => { overlayRef.current = overlay; }, [overlay]);
   useEffect(() => { catatRef.current = catat; }, [catat]);
 
   useEffect(() => { registerServiceWorker(); }, []);
+
+  useEffect(() => {
+    const check = () => setIsWideScreen(typeof window !== "undefined" && window.innerWidth >= 900);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+
+  const effectiveWebMode = webMode || isWideScreen;
 
   useEffect(() => {
     const unlock = () => unlockNotificationAudio();
@@ -5316,26 +6378,94 @@ export default function NF3App(props) {
     [applyMemberUsers, members]
   );
 
-  const reloadFromCloud = useCallback(async () => {
-    if (!bizId) return;
-    if (catatRef.current || isUserTypingInForm()) return;
-    if (overlayRef.current === "laporanHarian") return;
+  const flushSave = useCallback(() => {
+    if (!bizId || skipSaveRef.current || !allowSaveRef.current) return;
+    const payload = pendingSavePayloadRef.current;
+    if (!payload) return;
+    const payloadKey = JSON.stringify(payload);
+    if (lastSavePayloadRef.current === payloadKey) {
+      pendingSavePayloadRef.current = null;
+      return;
+    }
+    lastSavePayloadRef.current = payloadKey;
+    pendingSavePayloadRef.current = null;
+    saveQueueRef.current = saveQueueRef.current
+      .then(async () => {
+        if (skipSaveRef.current) return;
+        const updatedAt = await saveState(bizId, payload);
+        if (updatedAt) {
+          lastOwnSaveAtRef.current = updatedAt;
+          setS((prev) => (prev && !skipSaveRef.current ? { ...prev, _cloudUpdatedAt: updatedAt } : prev));
+        }
+      })
+      .catch((e) => {
+        console.error(e);
+        lastSavePayloadRef.current = null;
+        setCloudSyncState("err");
+        setTimeout(() => setCloudSyncState("idle"), 4500);
+        playNotificationPing();
+        if (typeof navigator !== "undefined" && navigator.vibrate) {
+          try { navigator.vibrate([80, 60, 120]); } catch { /* ignore */ }
+        }
+        const errText = String(e?.message || "");
+        const networkHint = /timeout|network|failed to fetch|offline/i.test(errText)
+          ? "Indikasi jaringan lambat/putus."
+          : "";
+        showActionToast(
+          `Gagal simpan ke awan (${getActiveAccountLabel()}) — data masih di HP. ${networkHint} Tap ☁️ untuk retry.`,
+          "error",
+          6500
+        );
+      });
+  }, [bizId, getActiveAccountLabel]);
 
-    await saveQueueRef.current.catch(() => {});
+  const reloadFromCloud = useCallback(async (opts = {}) => {
+    const manual = opts.manual === true;
+    const quiet = opts.source === "realtime";
+    if (!bizId) {
+      if (manual) showActionToast("Belum ada bisnis aktif.", "error");
+      return;
+    }
+    if (cloudSyncBusyRef.current) {
+      if (manual) showActionToast("Masih menyinkronkan… tunggu sebentar.", "info", 2200);
+      return;
+    }
+    if (catatRef.current || isUserTypingInForm()) {
+      if (manual) showActionToast("Selesaikan input dulu — sync ditunda agar data tidak hilang.", "info", 4000);
+      return;
+    }
+    if (overlayRef.current === "laporanHarian") {
+      if (manual) showActionToast("Tutup form laporan harian dulu, lalu tap awan lagi.", "info", 4000);
+      return;
+    }
 
-    setCloudSyncState("syncing");
+    cloudSyncBusyRef.current = true;
+    if (!quiet) setCloudSyncState("syncing");
     setLoadErr(null);
+    if (manual) {
+      if (typeof navigator !== "undefined" && navigator.vibrate) {
+        try { navigator.vibrate(15); } catch { /* ignore */ }
+      }
+      showActionToast("Menyinkronkan dari awan…", "info", 8000);
+    }
     skipSaveRef.current = true;
     try {
+      clearTimeout(saveDebounceRef.current);
+      flushSave();
+      await saveQueueRef.current.catch(() => {});
+
       const cloudDoc = await loadState(bizId, { businessType: business?.type });
       const prev = sRef.current;
+      if (quiet && cloudDoc?._cloudUpdatedAt && prev?._cloudUpdatedAt === cloudDoc._cloudUpdatedAt) {
+        return;
+      }
       let nextDoc = cloudDoc;
       if (prev) {
         const strip = (doc) => {
           const { currentUser: _cu, users: _u, _systemThemeTick: _t, _cloudUpdatedAt: _c, ...rest } = doc || {};
           return rest;
         };
-        const merged = mergeAppStateData(strip(cloudDoc), strip(prev));
+        const merged = mergeAppStateFromCloudPull(strip(cloudDoc), strip(prev));
         nextDoc = {
           ...cloudDoc,
           ...merged,
@@ -5346,17 +6476,53 @@ export default function NF3App(props) {
       }
       setS(mergeLoadedDoc(nextDoc));
       allowSaveRef.current = true;
-      setSyncInfo(buildSyncMeta(nextDoc, prev));
-      setCloudSyncState("ok");
-      setTimeout(() => setCloudSyncState("idle"), 2000);
+      const meta = buildSyncMeta(nextDoc, prev);
+      setSyncInfo(meta);
+      if (!quiet) setCloudSyncState("ok");
+      if (manual) {
+        if (meta.saldoDelta && Math.abs(meta.saldoDelta.delta) >= 1000) {
+          const wName = (nextDoc?.wallets || []).find(w => w.id === meta.saldoDelta.walletId)?.name || "Dompet";
+          showActionToast(
+            `Sync OK · ${wName} ${meta.saldoDelta.delta > 0 ? "+" : ""}${fmtMoney(meta.saldoDelta.delta, nextDoc?.profile?.currency || "IDR")} · Kode ${meta.code}`,
+            "success",
+            4500
+          );
+        } else {
+          showActionToast(`Sync OK · ${meta.hint || "Data diperbarui"} · Kode ${meta.code}`, "success", 4000);
+        }
+      } else if (quiet && meta.hint && meta.hint !== "Sudah versi terbaru") {
+        showActionToast(`Data baru dari HP lain · ${meta.hint}`, "info", 3500);
+      } else if (meta.saldoDelta && Math.abs(meta.saldoDelta.delta) >= 1000) {
+        const wName = (nextDoc?.wallets || []).find(w => w.id === meta.saldoDelta.walletId)?.name || "Dompet";
+        showActionToast(
+          `${wName} diperbarui (${meta.saldoDelta.delta > 0 ? "+" : ""}${fmtMoney(meta.saldoDelta.delta, nextDoc?.profile?.currency || "IDR")}) dari HP lain`,
+          "info",
+          3500
+        );
+      }
+      if (!quiet) setTimeout(() => setCloudSyncState("idle"), manual ? 4000 : 2000);
     } catch (e) {
-      setLoadErr(e.message || "Gagal memuat");
-      setCloudSyncState("err");
-      setTimeout(() => setCloudSyncState("idle"), 2500);
+      const msg = e.message || "Gagal memuat";
+      setLoadErr(msg);
+      if (!quiet) {
+        setCloudSyncState("err");
+        setTimeout(() => setCloudSyncState("idle"), manual ? 4500 : 2500);
+      }
+      if (manual) {
+        const networkHint = /timeout|network|failed to fetch|offline/i.test(String(msg))
+          ? "Kemungkinan jaringan lambat/putus."
+          : null;
+        showActionToast(
+          `Gagal sync awan: ${msg}.${networkHint ? ` ${networkHint}` : ""} Tap ☁️ lagi.`,
+          "error",
+          5600
+        );
+      }
     } finally {
       skipSaveRef.current = false;
+      cloudSyncBusyRef.current = false;
     }
-  }, [bizId, business?.type, mergeLoadedDoc]);
+  }, [bizId, business?.type, mergeLoadedDoc, flushSave]);
 
   // Muat dokumen state bisnis aktif dari Supabase + suntik identitas login nyata.
   useEffect(() => {
@@ -5365,6 +6531,8 @@ export default function NF3App(props) {
     allowSaveRef.current = false;
     setLoadErr(null);
     setS(null);
+    lastSavePayloadRef.current = null;
+    lastOwnSaveAtRef.current = null;
     loadState(bizId, { businessType: business?.type })
       .then(doc => {
         if (!alive) return;
@@ -5394,7 +6562,38 @@ export default function NF3App(props) {
     });
   }, [members, applyMemberUsers]);
 
-  // Auto-muat ulang dari awan (~45 detik + saat tab aktif kembali)
+  // Realtime: HP lain simpan → langsung tarik dari awan (bukan nunggu poll)
+  useEffect(() => {
+    if (!bizId) return;
+    const schedulePull = (updatedAt) => {
+      if (!updatedAt) return;
+      if (lastOwnSaveAtRef.current && updatedAt === lastOwnSaveAtRef.current) return;
+      if (sRef.current?._cloudUpdatedAt && updatedAt === sRef.current._cloudUpdatedAt) return;
+      clearTimeout(realtimePullTimerRef.current);
+      realtimePullTimerRef.current = setTimeout(() => {
+        const pending = pendingSavePayloadRef.current;
+        const savedKey = lastSavePayloadRef.current;
+        if (pending && savedKey !== JSON.stringify(pending)) {
+          clearTimeout(saveDebounceRef.current);
+          flushSave();
+          return;
+        }
+        reloadFromCloud({ source: "realtime" });
+      }, REALTIME_PULL_DEBOUNCE_MS);
+    };
+    const unsub = subscribeAppStateChanges(
+      bizId,
+      schedulePull,
+      (status) => setRealtimeLive(status === "SUBSCRIBED")
+    );
+    return () => {
+      clearTimeout(realtimePullTimerRef.current);
+      setRealtimeLive(false);
+      unsub();
+    };
+  }, [bizId, reloadFromCloud, flushSave]);
+
+  // Cadangan poll (jika realtime putus) + saat tab aktif kembali
   useEffect(() => {
     if (!bizId) return;
     const tick = () => {
@@ -5403,7 +6602,7 @@ export default function NF3App(props) {
       if (overlayRef.current === "laporanHarian") return;
       reloadFromCloud();
     };
-    const id = setInterval(tick, CLOUD_POLL_MS);
+    const id = setInterval(tick, CLOUD_POLL_FALLBACK_MS);
     const onVisible = () => {
       if (document.visibilityState === "visible") tick();
     };
@@ -5415,9 +6614,81 @@ export default function NF3App(props) {
   }, [bizId, reloadFromCloud]);
 
   const user = useMemo(() => sessionUser(authUser), [authUser]);
-  const view = useMemo(() => withSessionUser(s, authUser), [s, authUser]);
+  const view = useMemo(() => {
+    const base = withSessionUser(s, authUser);
+    if (!base?.wallets || !sharedMirror) return base;
+    return { ...base, wallets: applyMirrorBalances(base.wallets, sharedMirror) };
+  }, [s, authUser, sharedMirror]);
   const features = useMemo(() => businessFeatures(business), [business]);
   const canonicalBusiness = useMemo(() => findCanonicalInList(businesses), [businesses]);
+
+  const enabledSharedLinks = useMemo(
+    () => (Array.isArray(s?.walletSetup?.sharedLinks) ? s.walletSetup.sharedLinks.filter((l) => l.enabled) : []),
+    [s?.walletSetup?.sharedLinks]
+  );
+  const sharedLinksKey = useMemo(
+    () => enabledSharedLinks.map((l) => `${l.id}:${l.sourceBusinessId}:${l.sourceWalletId}`).join("|"),
+    [enabledSharedLinks]
+  );
+
+  const refreshSharedBankData = useCallback(async () => {
+    if (!bizId || features.isFnB || !canWriteSharedBank(user?.role) || !enabledSharedLinks.length) {
+      setSharedMirror(null);
+      setSharedTxByWallet(null);
+      return;
+    }
+    try {
+      const [balanceRes, txRes] = await Promise.all([
+        fetchSharedBankBalances(bizId),
+        fetchSharedBankTransactions(bizId, { limit: 100 }),
+      ]);
+      setSharedMirror(balanceRes.balances || {});
+      setSharedTxByWallet(txRes.transactionsByWallet || {});
+    } catch {
+      try {
+        const docs = {};
+        await Promise.all(
+          sourceBusinessIdsForLinks(enabledSharedLinks).map(async (id) => {
+            try {
+              docs[id] = await loadAppState(id);
+            } catch {
+              docs[id] = null;
+            }
+          })
+        );
+        setSharedMirror(mirrorBalancesForLinks(enabledSharedLinks, docs));
+        const txMap = {};
+        for (const link of enabledSharedLinks) {
+          const doc = docs[link.sourceBusinessId];
+          const virtualId = sharedWalletId(link);
+          const raw = walletTransactionsFromDoc(doc, link.sourceWalletId, { limit: 0 });
+          const filtered = filterSharedTransactionsForView(raw, {
+            businessId: bizId,
+            userId: user?.id,
+            role: user?.role,
+          });
+          filtered.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+          txMap[virtualId] = mapTransactionsToSharedWallet(filtered.slice(0, 100), virtualId);
+        }
+        setSharedTxByWallet(txMap);
+      } catch {
+        setSharedMirror(null);
+        setSharedTxByWallet(null);
+      }
+    }
+  }, [bizId, features.isFnB, user?.role, user?.id, enabledSharedLinks]);
+
+  // Mirror saldo + riwayat rekening Sam @ FNB — owner/admin/purchasing NF (API service read).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      await refreshSharedBankData();
+      if (cancelled) return;
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshSharedBankData, s?._cloudUpdatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     setOverlay(null);
@@ -5425,12 +6696,8 @@ export default function NF3App(props) {
     setFnbGate(null);
   }, [bizId]);
 
-  useEffect(() => {
-    if (!user?.role || !bizId || !canonicalBusiness) return;
-    if (user.role === "purchasing" && !features.purchasingModule && canonicalBusiness.id !== bizId) {
-      switchBusiness(canonicalBusiness.id);
-    }
-  }, [user?.role, bizId, features.purchasingModule, canonicalBusiness, switchBusiness]);
+  // Staf NF (admin/purchasing) tetap di Fishing — JANGAN auto-pindah ke FNB.
+  // Purchasing F&B punya purchasingModule=true di Nusa Food; di Fishing mereka catat belanja lewat CatatTransaksi biasa.
 
   useEffect(() => {
     if (!user?.role) return;
@@ -5460,17 +6727,36 @@ export default function NF3App(props) {
     if (name === "broadcast" && !canDo(user.role, "kirimPengumuman")) return;
     if (name === "voidReview" && !canDo(user.role, "reviewVoidLog")) return;
     if (!isOverlayAllowedForBusiness(name, business)) {
+      // Jangan blok staf dengan gate "Pindah ke Nusa Food" — kasih tahu saja fitur tidak tersedia di NF.
+      if (user?.role !== "owner") {
+        showActionToast(fnbFeatureLabel(name) + " hanya di Nusa Food (F&B).", "error");
+        return;
+      }
       setFnbGate(name);
       return;
     }
     setOverlay(name);
   }, [user.role, business]);
 
+  /** Mic / catat belanja — selalu CatatTransaksi di NF; PurchasingForm hanya F&B. */
+  const openCatat = useCallback(() => {
+    setFnbGate(null);
+    setOverlay(null);
+    setTab("beranda");
+    setCatat(true);
+  }, []);
+
   const openLaporanHarian = useCallback((date = null) => {
     setLaporanInitialDate(date);
     setLaporanOpenSeq(seq => seq + 1);
     openOverlay("laporanHarian");
   }, [openOverlay]);
+
+  const openWalletHistory = useCallback((walletId) => {
+    if (!walletId) return;
+    setWalletHistoryId(walletId);
+    setOverlay("walletHistory");
+  }, []);
 
   const handleNotifAction = useCallback((action) => {
     if (!action?.type) return;
@@ -5491,13 +6777,12 @@ export default function NF3App(props) {
         openOverlay("voidReview");
         break;
       case "catatBelanja":
-        setTab("beranda");
-        setCatat(true);
+        openCatat();
         break;
       default:
         break;
     }
-  }, [openLaporanHarian, openOverlay]);
+  }, [openLaporanHarian, openOverlay, openCatat]);
 
   useEffect(() => {
     openLaporanRef.current = openLaporanHarian;
@@ -5511,7 +6796,7 @@ export default function NF3App(props) {
     if (!s || !user?.id) return;
     const soundOn = s.automation?.revisionAlertSound !== false;
     visibleStaffMessages(s.staffMessages, user)
-      .filter(m => !(m.readBy || []).includes(user.id) && isActionableStaffMessage(m, user))
+      .filter(m => !(m.readBy || []).includes(user.id) && isActionableStaffMessage(m, user, s?.dailyReports))
       .forEach(m => {
         if (revisionNotifiedRef.current.has(m.id)) return;
         revisionNotifiedRef.current.add(m.id);
@@ -5541,17 +6826,28 @@ export default function NF3App(props) {
 
   useEffect(() => {
     if (!s || !bizId || skipSaveRef.current || !allowSaveRef.current) return;
-    const { currentUser, users, _systemThemeTick, _cloudUpdatedAt, _cloudLoaded, ...data } = s;
-    saveQueueRef.current = saveQueueRef.current
-      .then(() => {
-        if (skipSaveRef.current) return;
-        return saveState(bizId, data);
-      })
-      .catch((e) => {
-        console.error(e);
-        showActionToast("Gagal simpan ke awan — coba tombol sync atau refresh", "error");
-      });
-  }, [s, bizId]);
+    const payload = extractSavePayload(s);
+    const payloadKey = JSON.stringify(payload);
+    if (lastSavePayloadRef.current === payloadKey) return;
+    pendingSavePayloadRef.current = payload;
+    clearTimeout(saveDebounceRef.current);
+    const now = Date.now();
+    const delay = now < criticalSaveUntilRef.current ? 0 : SAVE_DEBOUNCE_MS;
+    saveDebounceRef.current = setTimeout(flushSave, delay);
+    return () => clearTimeout(saveDebounceRef.current);
+  }, [s, bizId, flushSave]);
+
+  useEffect(() => {
+    const onHide = () => {
+      if (document.visibilityState === "hidden") flushSave();
+    };
+    window.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", flushSave);
+    return () => {
+      window.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", flushSave);
+    };
+  }, [flushSave]);
 
   const mutate = useCallback((fn) => setS(prev => {
     if (!prev) return prev;
@@ -5564,8 +6860,21 @@ export default function NF3App(props) {
     }
     delete copy.currentUser;
     delete copy.users;
+    sRef.current = copy;
     return copy;
   }), [authUser?.role]);
+
+  const scheduleImmediateSave = useCallback((opts = {}) => {
+    if (opts.critical === true) {
+      criticalSaveUntilRef.current = Date.now() + CRITICAL_SAVE_WINDOW_MS;
+    }
+    queueMicrotask(() => {
+      if (!sRef.current || !bizId || skipSaveRef.current || !allowSaveRef.current) return;
+      pendingSavePayloadRef.current = extractSavePayload(sRef.current);
+      clearTimeout(saveDebounceRef.current);
+      flushSave();
+    });
+  }, [bizId, flushSave]);
 
   // Subscribe ke system dark mode jika tema = sistem
   useEffect(() => {
@@ -5577,8 +6886,13 @@ export default function NF3App(props) {
     return () => mq.removeEventListener("change", handler);
   }, [s?.profile?.theme]);
 
-  const addTx = (d) => {
+  const addTx = async (d) => {
     const role = user.role || "kasir";
+    const amount = Math.round(Number(d?.amount) || 0);
+    if (!(amount > 0)) {
+      showActionToast("Nominal transfer/transaksi harus lebih dari 0.", "error");
+      return false;
+    }
     if (d.type === "transfer" && !canDo(role, "transfer")) {
       showActionToast("Transfer tidak diizinkan untuk role Anda.", "error");
       return false;
@@ -5591,7 +6905,17 @@ export default function NF3App(props) {
       showActionToast("Pengeluaran tidak diizinkan untuk role Anda.", "error");
       return false;
     }
-    const allowedWallets = new Set(visibleWallets(view?.wallets || [], user).map(w => w.id));
+
+    const sharedTarget =
+      d.type === "transfer"
+        ? (isSharedWallet({ id: d.fromWalletId }) || isSharedWallet({ id: d.toWalletId }))
+        : isSharedWallet({ id: d.walletId });
+    if (d.type === "transfer" && sharedTarget) {
+      showActionToast("Rekening Sam bersama: catat pemasukan/pengeluaran langsung, bukan transfer lokal.", "error");
+      return false;
+    }
+
+    const allowedWallets = new Set(visibleWalletsForBusiness(view?.wallets || [], user, business).map(w => w.id));
     if (d.type === "transfer") {
       if (!allowedWallets.has(d.fromWalletId) || !allowedWallets.has(d.toWalletId)) {
         showActionToast("Dompet transfer tidak tersedia untuk akun Anda.", "error");
@@ -5601,6 +6925,81 @@ export default function NF3App(props) {
       showActionToast("Pilih dompet belanja yang tersedia (hubungi admin jika kosong).", "error");
       return false;
     }
+
+    // Rekening Sam terhubung → tulis ke FNB (sumber kebenaran), bukan app_state Fishing lokal.
+    if (d.type !== "transfer" && isSharedWallet({ id: d.walletId })) {
+      if (!canWriteSharedBank(role)) {
+        showActionToast("Anda tidak boleh mencatat di rekening bersama.", "error");
+        return false;
+      }
+      try {
+        const txId = "tsh_" + Date.now() + Math.random().toString(36).slice(2, 6);
+        const res = await postSharedBankTx({
+          businessId: bizId,
+          businessName: businessDisplayName || business?.name,
+          sharedWalletId: d.walletId,
+          type: d.type,
+          amount,
+          categoryId: d.categoryId,
+          desc: d.desc,
+          date: d.date,
+          source: d.source || "NF shared bank",
+          txId,
+        });
+        setSharedMirror((prev) => ({
+          ...(prev || {}),
+          [d.walletId]: {
+            ...(prev?.[d.walletId] || {}),
+            linkId: String(d.walletId).replace(/^shared_/, ""),
+            balance: res.balance,
+            sourceWalletName: res.sourceWalletName || "",
+            sourceBusinessName: "Nusa Food",
+            missing: false,
+          },
+        }));
+        setSharedTxByWallet((prev) => {
+          const next = { ...(prev || {}) };
+          const rows = [...(next[d.walletId] || [])];
+          rows.unshift({
+            id: txId,
+            type: d.type,
+            amount,
+            walletId: d.walletId,
+            categoryId: d.categoryId,
+            desc: d.desc,
+            date: d.date || today(),
+            source: d.source || "NF shared bank",
+            meta: {
+              sharedWriteThrough: true,
+              fromBusinessId: bizId,
+              createdById: user?.id || null,
+              createdByName: user?.name || null,
+              createdByRole: role,
+            },
+          });
+          next[d.walletId] = rows.slice(0, 100);
+          return next;
+        });
+        mutate((st) => {
+          const w = (st.wallets || []).find((x) => x.id === d.walletId);
+          if (w) w.opening = res.balance;
+        });
+        if (role === "purchasing") {
+          showActionToast(`Belanja tersimpan di ${res.sourceWalletName || "dompet bersama"} · ketuk dompet untuk lihat riwayat`, "success");
+        } else {
+          showActionToast(
+            `Tersimpan di ${res.sourceWalletName || "rekening Sam"} (FNB) · saldo ${fmtMoney(res.balance, view?.profile?.currency || "IDR")}`,
+            "success"
+          );
+        }
+        refreshSharedBankData();
+        return true;
+      } catch (e) {
+        showActionToast(e.message || "Gagal catat ke rekening bersama.", "error");
+        return false;
+      }
+    }
+
     if (d.type === "out") {
       const floorErr = role === "purchasing"
         ? checkPurchasingFloor(d.walletId, d.amount, view?.wallets || [], view?.transactions || [], user)
@@ -5610,11 +7009,44 @@ export default function NF3App(props) {
         return false;
       }
     }
-    mutate(st => st.transactions.push({
-      ...d,
-      id: "t" + Date.now() + Math.random().toString(36).slice(2, 5),
-    }));
-    showActionToast("Transaksi tersimpan.", "success");
+    const txId = "t" + Date.now() + Math.random().toString(36).slice(2, 5);
+    const transferRef = d.type === "transfer" ? (d.transferRef || ("trf_" + Date.now() + Math.random().toString(36).slice(2, 6))) : null;
+    mutate((st) => {
+      const baseMeta = d.meta && typeof d.meta === "object" ? d.meta : {};
+      const txMeta = {
+        ...baseMeta,
+        createdById: user?.id || baseMeta.createdById || null,
+        createdByName: user?.name || baseMeta.createdByName || null,
+        ...(d.type === "transfer" ? { transferRef } : {}),
+      };
+      if (d.module === "purchasing" || String(d.source || "").startsWith("purchasing")) {
+        txMeta.verified = txMeta.verified === true;
+      }
+      const tx = { ...d, amount, id: txId, meta: txMeta };
+      st.transactions.push(tx);
+      if (d.type === "transfer") {
+        const toW = (st.wallets || []).find((w) => w.id === d.toWalletId);
+        const fromW = (st.wallets || []).find((w) => w.id === d.fromWalletId);
+        if (isKasKecilWallet(toW)) {
+          try {
+            st.staffMessages = prependStaffMessage(
+              st.staffMessages,
+              createPurchasingFundMessage({
+                amount,
+                fromWalletName: fromW?.name || "Kas Besar",
+                author: user,
+                transactionId: txId,
+              }),
+              st.notificationPrefs
+            );
+          } catch (e) {
+            console.error("[addTx] purchasing fund message error:", e);
+          }
+        }
+      }
+    });
+    scheduleImmediateSave({ critical: true });
+    showActionToast("Transaksi tersimpan — menyinkron ke awan…", "success");
     return true;
   };
   const acceptDraft = (n) => {
@@ -5677,48 +7109,41 @@ export default function NF3App(props) {
   return (
     <div data-theme={theme} className="nf3-shell">
       <style>{CSS}</style>
-      <div className="nf3-shell-inner" style={{ maxWidth: webMode ? 1100 : 440 }}>
-        {webMode && (
+      <div className="nf3-shell-inner" style={{ maxWidth: effectiveWebMode ? 1100 : 440 }}>
+        {effectiveWebMode && (
           <div style={{ background: "linear-gradient(90deg,#4338CA,#6366F1)", color: "#fff", padding: "10px 20px", fontSize: 13, fontWeight: 600, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span>🖥 NF3 Web Dashboard — Laporan & Export</span>
             <a href="/pair" style={{ color: "rgba(255,255,255,.85)", fontSize: 12 }}>Pair ulang</a>
           </div>
         )}
         <div className="nf3-scroll scroll-hide">
-          {tab === "beranda"  && <Beranda s={view} setTab={setTab} setOverlay={openOverlay} onOpenLaporan={openLaporanHarian} hide={hide} setHide={setHide} onCloudSync={reloadFromCloud} cloudSyncState={cloudSyncState} syncInfo={syncInfo} bizId={bizId} session={session} businessDisplayName={businessDisplayName} onCatat={() => setCatat(true)} business={business} businesses={businesses} switchBusiness={switchBusiness} features={features} />}
-          {tab === "laporan"  && <Laporan s={view} mutate={mutate} onOpenPair={() => openOverlay("pair")} onOpenPurchasingReport={() => openOverlay("laporanPurchasing")} business={business} features={features} />}
+          {tab === "beranda"  && <Beranda s={view} setTab={setTab} setOverlay={openOverlay} onOpenLaporan={openLaporanHarian} hide={hide} setHide={setHide} onCloudSync={() => reloadFromCloud({ manual: true })} cloudSyncState={cloudSyncState} syncInfo={syncInfo} realtimeLive={realtimeLive} bizId={bizId} session={session} businessDisplayName={businessDisplayName} onCatat={openCatat} business={business} businesses={businesses} switchBusiness={switchBusiness} features={features} onOpenWalletHistory={openWalletHistory} sharedMirror={sharedMirror} sharedTxByWallet={sharedTxByWallet} />}
+          {tab === "laporan"  && <Laporan s={view} mutate={mutate} onOpenPair={() => openOverlay("pair")} onOpenPurchasingReport={() => openOverlay("laporanPurchasing")} business={business} features={features} webMode={effectiveWebMode} sharedTxByWallet={sharedTxByWallet} />}
           {tab === "void" && features.voidOutlet && canDo(user.role, "inputVoid") && <VoidScreen s={view} mutate={mutate} user={user} />}
           {tab === "analisis" && features.fnbAnalisis && canDo(user.role, "lihatAnalisis") && <Analisis s={view} hideInsight={(id) => mutate(d => { if (!d.hiddenInsights) d.hiddenInsights = []; d.hiddenInsights.push(id); })} />}
           {tab === "asisten" && features.purchasingModule && showPurchasingAsistenTab(user.role) && <AsistenPurchasing s={view} bizId={bizId} />}
-          {tab === "profil"   && <PengaturanScreen s={view} mutate={mutate} onClose={() => setTab("beranda")} setOverlay={openOverlay} bizId={bizId} authUser={authUser} signOut={signOut} businesses={businesses} switchBusiness={switchBusiness} businessDisplayName={businessDisplayName} features={features} />}
+          {tab === "profil"   && <PengaturanScreen s={view} mutate={mutate} onClose={() => setTab("beranda")} setOverlay={openOverlay} bizId={bizId} authUser={authUser} signOut={signOut} businesses={businesses} switchBusiness={switchBusiness} businessDisplayName={businessDisplayName} features={features} business={business} />}
         </div>
-        {!webMode && <PwaInstallBanner />}
+        {!effectiveWebMode && <PwaInstallBanner />}
         <NavBar tab={tab} setTab={setTab} user={user} business={business}
-          shellMaxWidth={webMode ? 1100 : 440}
-          onMic={() => setCatat(true)} micTitle={getAccountUi(user, business).micTitle} />
+          shellMaxWidth={effectiveWebMode ? 1100 : 440}
+          onMic={openCatat} micTitle={getAccountUi(user, business).micTitle} />
 
-        {catat && user.role === "purchasing" && !features.purchasingModule && (
-          <FnbGateSheet
-            target="laporanPurchasing"
-            onClose={() => setCatat(false)}
-            canonicalName={canonicalBusiness?.name || CANONICAL_DISPLAY_NAME}
-            onSwitch={() => {
-              setCatat(false);
-              if (canonicalBusiness?.id && switchBusiness) switchBusiness(canonicalBusiness.id);
-            }}
-          />
-        )}
         {catat && user.role === "purchasing" && features.purchasingModule
           ? <PurchasingForm s={{ ...view, business: { id: bizId } }} onSave={addTx} onClose={() => setCatat(false)} />
-          : catat && !(user.role === "purchasing" && !features.purchasingModule) && <CatatTransaksi s={view} bizId={bizId} onSave={addTx} onClose={() => setCatat(false)} />}
-        {fnbGate && (
+          : catat && <CatatTransaksi s={view} bizId={bizId} business={business} mutate={mutate} onNotify={showActionToast} onSave={addTx} onClose={() => setCatat(false)} />}
+        {fnbGate && user?.role === "owner" && (
           <FnbGateSheet
             target={fnbGate}
             onClose={() => setFnbGate(null)}
             canonicalName={canonicalBusiness?.name || CANONICAL_DISPLAY_NAME}
+            canSwitch={user?.role === "owner" && !!canonicalBusiness?.id}
             onSwitch={() => {
+              // Hanya owner boleh pindah ke FNB dari gate ini — staf NF tidak saling terhubung.
               setFnbGate(null);
-              if (canonicalBusiness?.id && switchBusiness) switchBusiness(canonicalBusiness.id);
+              if (user?.role === "owner" && canonicalBusiness?.id && switchBusiness) {
+                switchBusiness(canonicalBusiness.id);
+              }
             }}
           />
         )}
@@ -5730,11 +7155,26 @@ export default function NF3App(props) {
         {overlay === "inbox"      && canDo(user.role, "inputIncome") && <InboxScreen s={view} onClose={() => setOverlay(null)} onAccept={acceptDraft} onDismiss={dismiss} onAddDraft={addInboxDraft} />}
         {overlay === "notif"      && <NotifScreen s={view} user={user} mutate={mutate} onClose={() => setOverlay(null)} onCompose={() => setOverlay("broadcast")} onAction={handleNotifAction} />}
         {overlay === "broadcast" && canDo(user.role, "kirimPengumuman") && <BroadcastScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} />}
-        {overlay === "adjustSaldo" && canDo(user.role, "editSaldoDompet") && <AdjustSaldoScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} />}
+        {overlay === "adjustSaldo" && canDo(user.role, "editSaldoDompet") && <AdjustSaldoScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} business={business} />}
         {overlay === "wallets" && canDo(user.role, "kelolaDompet") && <WalletScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} user={user} bizId={bizId} businesses={businesses} features={features} />}
+        {overlay === "walletHistory" && walletHistoryId && (
+          <WalletHistoryScreen
+            s={view}
+            business={business}
+            walletId={walletHistoryId}
+            sharedTxByWallet={sharedTxByWallet}
+            bizId={bizId}
+            onClose={() => {
+              setWalletHistoryId(null);
+              setOverlay(null);
+            }}
+          />
+        )}
         {overlay === "categories" && <CatScreen s={view} mutate={mutate} onClose={() => setOverlay(null)} />}
         {overlay === "kategoriPurchasing" && features.purchasingModule && canDo(user.role, "kelolaKategoriSemua") && (
-          <KategoriPurchasing s={view} mutate={mutate} onClose={() => setOverlay(null)} />
+          <Sheet title="Kategori Purchasing" onClose={() => setOverlay(null)}>
+            <KategoriPurchasing s={view} mutate={mutate} />
+          </Sheet>
         )}
         {overlay === "purchasingAliases" && features.purchasingModule && canDo(user.role, "kelolaKategoriSemua") && (
           <Sheet title="Alias Barang Purchasing" onClose={() => setOverlay(null)}>
@@ -5772,7 +7212,7 @@ export default function NF3App(props) {
             outlet={user.role === "kasir" && user.outlet ? user.outlet : "semua"}
             businessId={bizId}
             sessionToken={session?.access_token}
-            bottomOffset={webMode ? 24 : 88}
+            bottomOffset={effectiveWebMode ? 24 : 88}
           />
         )}
         <ActionToast />

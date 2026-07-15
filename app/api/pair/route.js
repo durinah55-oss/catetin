@@ -1,11 +1,15 @@
 // app/api/pair/route.js — Web pairing HP ↔ PC
 
 import { getSupabaseAdmin } from "../../../lib/supabaseAdmin.js";
+import { formatApiError } from "../../../lib/apiError.js";
 
 export async function POST(req) {
   try {
     const sb = getSupabaseAdmin();
     const { userId, businessId } = await req.json();
+    if (!userId || !businessId) {
+      return Response.json({ error: "userId dan businessId wajib" }, { status: 400 });
+    }
     const code = "WARUNG-" + Math.random().toString(36).slice(2, 8).toUpperCase();
     const { data, error } = await sb.from("web_sessions").insert({
       user_id: userId, business_id: businessId, pair_code: code,
@@ -13,7 +17,8 @@ export async function POST(req) {
     if (error) throw error;
     return Response.json({ code, sessionId: data.id });
   } catch (e) {
-    return Response.json({ error: String(e) }, { status: 500 });
+    console.error("[api/pair POST]", e);
+    return Response.json({ error: formatApiError(e, "Gagal membuat kode pairing") }, { status: 500 });
   }
 }
 
@@ -34,7 +39,7 @@ export async function GET(req) {
     await sb.from("web_sessions").update({ approved: true }).eq("id", data.id);
     return Response.json({ ok: true, userId: data.user_id, businessId: data.business_id });
   } catch (e) {
-    return Response.json({ error: String(e) }, { status: 500 });
+    return Response.json({ error: formatApiError(e, "Gagal memproses kode") }, { status: 500 });
   }
 }
 
@@ -48,6 +53,6 @@ export async function PATCH(req) {
       .gt("expires_at", new Date().toISOString()).single();
     return Response.json({ approved: data?.approved ?? false });
   } catch (e) {
-    return Response.json({ error: String(e) }, { status: 500 });
+    return Response.json({ error: formatApiError(e, "Gagal cek status kode") }, { status: 500 });
   }
 }
